@@ -1,5 +1,5 @@
 idf_component_register(
-    SRCS "main.c"
+    SRCS "main.c" "narrowband.cpp"
     INCLUDE_DIRS "."
     REQUIRES vigilant_engine
 )
