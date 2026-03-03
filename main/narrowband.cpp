@@ -5,6 +5,8 @@
 #include <cstdint>
 #include "EspHal.h"
 #include "esp_log.h"
+#include <cstring>
+#include <sys/types.h>
 
 // radio comms interval
 constexpr int RADIO_INTERVAL_MS = 500;
@@ -19,24 +21,46 @@ constexpr int NRST_PIN = 18;
 constexpr int BUSY_PIN = 21;
 constexpr int RXEN_PIN = 16;
 
+class NarrowbandRadio {
+private:
+    EspHal* hal;
+    LLCC68* radio;
+    std::queue<std::vector<uint8_t>> cmd_queue;
+    std::mutex cmd_queue_mutex;
+    
+    static NarrowbandRadio* instance;
+    
+    NarrowbandRadio();
+    
+public:
+    ~NarrowbandRadio();
+    static NarrowbandRadio* getInstance();
+    void enqueueCommand(const std::vector<uint8_t>& cmd);
+    std::vector<uint8_t> dequeueCommand();
+    void parseCommand();
+    void handleReceive();
+    void runThread();
+};
 
-static EspHal* s_hal = nullptr;
-static LLCC68* s_radio = nullptr;
+NarrowbandRadio* NarrowbandRadio::instance = nullptr;
 
 static const char* TAG = "Narrowband";
 
-void init_narrowband() {
 
+// CLASS IMPLEMENTATION
+
+NarrowbandRadio::NarrowbandRadio()
+    : hal(nullptr), radio(nullptr) {
     ESP_LOGI(TAG, "[LLCC68] Initializing narrowband radio...");
     
     // create a new instance of the HAL class
-    s_hal = new EspHal(SCLK_PIN, MISO_PIN, MOSI_PIN);
+    hal = new EspHal(SCLK_PIN, MISO_PIN, MOSI_PIN);
 
     // now we can create the radio module
-    s_radio = new LLCC68(new Module(s_hal, NSS_PIN, DIO1_PIN, NRST_PIN, BUSY_PIN));
+    radio = new LLCC68(new Module(hal, NSS_PIN, DIO1_PIN, NRST_PIN, BUSY_PIN));
 
     // freq 434 Mhz, bitrate 2.4 kHz, frequency deviation 2.4 kHz, receiver bandwidth DSB 11.7 kHz, power 22 dBm, preamble length 32 bit, TCXO voltage 0 V, useRegulatorLDO false
-    int state = s_radio->beginFSK(434, 2.4, 2.4, 11.7, 22, 32, 0, false);
+    int state = radio->beginFSK(434, 2.4, 2.4, 11.7, 22, 32, 0, false);
     if (state != RADIOLIB_ERR_NONE) {
         ESP_LOGI(TAG, "failed, code %d\n", state);
         return;
@@ -44,40 +68,70 @@ void init_narrowband() {
 
     ESP_LOGI(TAG, "success!\n");
 
-  // RXEN pin: 16
-  // TXEN pin controlled via dio2
-  s_radio->setRfSwitchPins(RXEN_PIN, RADIOLIB_NC);
-  s_radio->setDio2AsRfSwitch(true);
-  
+    // RXEN pin: 16
+    // TXEN pin controlled via dio2
+    radio->setRfSwitchPins(RXEN_PIN, RADIOLIB_NC);
+    radio->setDio2AsRfSwitch(true);
 
-  state = s_radio->setPaConfig(0x04, 0x00, 0x07, 0x01);
-  if (state != RADIOLIB_ERR_NONE) {
-    ESP_LOGI(TAG, "failed pa config, code %d\n", state);
-    return;
-  }
-  ESP_LOGI(TAG, "[LLCC68] PA config configured!\n");
+    // for more details, see LLCC68 datasheet, this is the highest power setting, with 22 dBm set in beginFSK
+    state = radio->setPaConfig(0x04, 0x00, 0x07, 0x01);
+    if (state != RADIOLIB_ERR_NONE) {
+        ESP_LOGI(TAG, "failed pa config, code %d\n", state);
+        return;
+    }
+    ESP_LOGI(TAG, "[LLCC68] PA config configured!\n");
 }
 
-
-void parse_command() {
-
+NarrowbandRadio::~NarrowbandRadio() {
+    if (hal != nullptr) {
+        delete hal;
+        hal = nullptr;
+    }
+    if (radio != nullptr) {
+        delete radio;
+        radio = nullptr;
+    }
 }
 
-// interrupt function
-// needs IRAM_ATTR to be used as interrupt func, which makes the func be stored in IRAM instead of flash, to ensure it can be executed when flash is not accessible (e.g. during sleep)
-void IRAM_ATTR handle_receive(void) {
-    if (s_hal == nullptr || s_radio == nullptr) {
+NarrowbandRadio* NarrowbandRadio::getInstance() {
+    if (instance == nullptr) {
+        instance = new NarrowbandRadio();
+    }
+    return instance;
+}
+
+void NarrowbandRadio::enqueueCommand(const std::vector<uint8_t>& cmd) {
+    std::lock_guard<std::mutex> lock(cmd_queue_mutex);
+    cmd_queue.push(cmd);
+}
+
+std::vector<uint8_t> NarrowbandRadio::dequeueCommand() {
+    std::lock_guard<std::mutex> lock(cmd_queue_mutex);
+    if (!cmd_queue.empty()) {
+        std::vector<uint8_t> cmd = std::move(cmd_queue.front());
+        cmd_queue.pop();
+        return cmd;
+    }
+    return {};
+}
+
+void NarrowbandRadio::parseCommand() {
+    // TODO: implement command parsing
+}
+
+void NarrowbandRadio::handleReceive() {
+    if (hal == nullptr || radio == nullptr) {
         return;
     }
 
-    size_t len = s_radio->getPacketLength();
+    size_t len = radio->getPacketLength();
     std::vector<uint8_t> buf(len);
-    int state = s_radio->readData(buf.data(), buf.size());
+    int state = radio->readData(buf.data(), buf.size());
 
     if (state == RADIOLIB_ERR_NONE) {
         ESP_LOGI(TAG, "Received packet: %s\n", buf.data());
-        // TODO: parse_command(), put received packet into cmd queue
-
+        // TODO: parseCommand(), put received packet into cmd queue
+        enqueueCommand(buf);
     } else if (state == RADIOLIB_ERR_CRC_MISMATCH) {
         ESP_LOGI(TAG, "Received packet with CRC mismatch!\n");
     } else {
@@ -85,9 +139,8 @@ void IRAM_ATTR handle_receive(void) {
     }
 }
 
-void narrowband_thread() {
-
-    if (s_hal == nullptr || s_radio == nullptr) {
+void NarrowbandRadio::runThread() {
+    if (hal == nullptr || radio == nullptr) {
         ESP_LOGI(TAG, "HAL or radio not initialized!\n");
         return;
     }
@@ -96,21 +149,19 @@ void narrowband_thread() {
 
     int state = RADIOLIB_ERR_NONE;
     while (true) {
-
         ESP_LOGI(TAG, "[LLCC68] Sending packet...");
 
-        state = s_radio->transmit("Hello world!");
-        if(state == RADIOLIB_ERR_NONE) {
+        state = radio->transmit("Hello world!");
+        if (state == RADIOLIB_ERR_NONE) {
             // the packet was successfully transmitted
             ESP_LOGI(TAG, "success!\n");
         } else {
             ESP_LOGI(TAG, "failed, code %d\n", state);
         }
-        ESP_LOGI(TAG, "Datarate measured: %f\n", s_radio->getDataRate());
+        ESP_LOGI(TAG, "Datarate measured: %f\n", radio->getDataRate());
 
-
-        state = s_radio->startReceive();
-        if(state == RADIOLIB_ERR_NONE) {
+        state = radio->startReceive();
+        if (state == RADIOLIB_ERR_NONE) {
             // the module is now in receive mode, waiting for a packet
             ESP_LOGI(TAG, "Waiting for a packet...\n");
         } else {
@@ -118,18 +169,55 @@ void narrowband_thread() {
         }
 
         // wait 0.5 s
-        s_hal->delay(RADIO_INTERVAL_MS);
+        hal->delay(RADIO_INTERVAL_MS);
         
         // if no packet was received, we just start sending again
     }
 }
 
-void destroy_narrowband() {
-    // free hal
-    delete s_hal;
-    s_hal = nullptr;
+// C COMPATIBILITY WRAPPERS
 
-    // free radio
-    delete s_radio;
-    s_radio = nullptr;
+extern "C" {
+    void init_narrowband() {
+        NarrowbandRadio::getInstance();
+    }
+
+    void enqueue_command(const uint8_t* data, size_t len) {
+        std::vector<uint8_t> cmd(data, data + len);
+        NarrowbandRadio::getInstance()->enqueueCommand(cmd);
+    }
+
+    // Dequeue into caller-provided buffer; returns number of bytes written,
+    // 0 if no data, -1 on error or if buffer too small
+    ssize_t dequeue_command(uint8_t* buf, size_t max_len) {
+        std::vector<uint8_t> v = NarrowbandRadio::getInstance()->dequeueCommand();
+        if (v.empty()) {
+            return 0;
+        }
+        if (buf == nullptr || max_len == 0) {
+            return -1;
+        }
+        size_t needed = v.size();
+        if (needed > max_len) {
+            // Do not truncate silently; signal error
+            return -1;
+        }
+        std::memcpy(buf, v.data(), needed);
+        return static_cast<ssize_t>(needed);
+    }
+
+    void IRAM_ATTR handle_receive(void) {
+        NarrowbandRadio::getInstance()->handleReceive();
+    }
+
+    void narrowband_thread() {
+        NarrowbandRadio::getInstance()->runThread();
+    }
+
+    void destroy_narrowband() {
+        if (NarrowbandRadio::instance != nullptr) {
+            delete NarrowbandRadio::instance;
+            NarrowbandRadio::instance = nullptr;
+        }
+    }
 }
