@@ -1,20 +1,15 @@
 #include "narrowband.h"
 #include <RadioLib.h>
-#include <vector>
-#include <cstdint>
 #include "EspHal.h"
 #include "esp_log.h"
 #include <cstring>
+#include <cstdint>
 #include <sys/types.h>
-#include <atomic>  // for ISR flag
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
+#include <freertos/task.h>
 
 namespace {
-
-    // flag set in ISR when packet arrives
-    // atomic operation to avoid data race between interrupt and main thread
-    static std::atomic<bool> s_received_packet{false};
 
     static const char* TAG = "Narrowband";
 
@@ -32,7 +27,7 @@ namespace {
         static constexpr int BUSY_PIN = 21;
         static constexpr int RXEN_PIN = 16;
 
-        int rxtx_interval_ms = 500;
+        static constexpr uint16_t rxtx_interval_ms = 500;
 
         EspHal hal;
         Module module;
@@ -40,6 +35,9 @@ namespace {
 
         QueueHandle_t* commandQueue;
         QueueHandle_t* sensorDataQueue;
+        
+        TaskHandle_t rxtxTaskHandle;
+        const UBaseType_t rxtxTaskNotifyIndex = 1; // index of the notification value used for receive ISR flag
         
         void handleReceive();
         static void IRAM_ATTR receive_isr(void);
@@ -51,6 +49,8 @@ namespace {
         void init(QueueHandle_t* commandQueue, QueueHandle_t* sensorDataQueue);
     };
 
+    // static instance of the narrowband class
+    NarrowbandRadio nb_radio;
 
     // CLASS IMPLEMENTATION
 
@@ -59,7 +59,8 @@ namespace {
         module(&hal, NSS_PIN, DIO1_PIN, NRST_PIN, BUSY_PIN),
         radio(&module),
         commandQueue(nullptr),
-        sensorDataQueue(nullptr) {}
+        sensorDataQueue(nullptr),
+        rxtxTaskHandle(nullptr) {}
 
     void NarrowbandRadio::init(QueueHandle_t* commandQueue, QueueHandle_t* sensorDataQueue) {
         ESP_LOGI(TAG, "[LLCC68] Initializing narrowband radio...");
@@ -97,23 +98,24 @@ namespace {
 
     // ISR callback stored in IRAM; just sets the atomic flag
     void IRAM_ATTR NarrowbandRadio::receive_isr(void) {
-        s_received_packet.store(true, std::memory_order_relaxed);
+        BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+
+        configASSERT( nb_radio.rxtxTaskHandle != NULL );
+
+        vTaskNotifyGiveIndexedFromISR( nb_radio.rxtxTaskHandle, nb_radio.rxtxTaskNotifyIndex, &xHigherPriorityTaskWoken );
+        portYIELD_FROM_ISR( xHigherPriorityTaskWoken );
     }
 
     void NarrowbandRadio::handleReceive() {
 
-        // check and clear ISR flag
-        if (!s_received_packet.load(std::memory_order_relaxed)) {
-            return;
-        }
-        s_received_packet.store(false, std::memory_order_relaxed);
-
         size_t len = radio.getPacketLength();
-        uint8_t* buf = (uint8_t*)malloc(len);
+        uint8_t* buf = (uint8_t*)malloc(len + 1); // +1 for null terminator
 
         int state = radio.readData(buf, len);
 
         if (state == RADIOLIB_ERR_NONE) {
+            // segfault if data is not null-terminated
+            buf[len] = '\0';
             ESP_LOGI(TAG, "Received packet: %s\n", buf);
             // maybe parse command here, currently we just enqueue the raw packet data for processing in the main thread
             // enqueueCommand(buf);
@@ -132,6 +134,7 @@ namespace {
 
     void NarrowbandRadio::rxtx_task() {
         ESP_LOGI(TAG, "[LLCC68] Started rxtx task!\n");
+        rxtxTaskHandle = xTaskGetCurrentTaskHandle();
 
         int state = RADIOLIB_ERR_NONE;
         while (true) {
@@ -154,16 +157,23 @@ namespace {
                 ESP_LOGI(TAG, "failed to start receiver, code %d\n", state);
             }
 
-            // wait 0.5 s
-            hal.delay(rxtx_interval_ms);
-            
-            // if no packet was received, we just start sending again
-            handleReceive();
+            // receive for 0.5 s (the amount specified by rxtx_interval_ms)
+            uint32_t ulNotificationValue;
+            TickType_t start = xTaskGetTickCount();
+            uint16_t elapsed_time_ms = 0;
+            while (elapsed_time_ms < rxtx_interval_ms) {
+                ulNotificationValue = ulTaskNotifyTakeIndexed(rxtxTaskNotifyIndex, pdTRUE, pdMS_TO_TICKS(rxtx_interval_ms - elapsed_time_ms));
+                if (ulNotificationValue == 1) {
+                    handleReceive();
+                    elapsed_time_ms = pdTICKS_TO_MS(xTaskGetTickCount() - start);
+                } else {
+                    // timeout, no packet received within the interval
+                    break;
+                }
+            }
         }
     }
 
-    // static instance of the narrowband class
-    NarrowbandRadio nb_radio;
 }
 
 // C COMPATIBILITY WRAPPERS
