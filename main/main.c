@@ -1,15 +1,34 @@
 #include <unistd.h>
-
 #include "esp_log.h"
+#include "vigilant.h"
+#include "status_led.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "status_led.h"
-#include "vigilant.h"
+
+#include "message.h"
+#include "narrowband.h"
 
 // static const char *TAG = "app_main";
 
-void app_main(void) {
-    VigilantConfig VgConfig = {.unique_component_name = "Vigilant ESP Test",
-                               .network_mode = NW_MODE_APSTA};
+void app_main(void)
+{
+    VigilantConfig VgConfig = {
+        .unique_component_name = "Vigilant ESP Test",
+        .network_mode = NW_MODE_APSTA
+    };
     ESP_ERROR_CHECK(vigilant_init(VgConfig));
+
+    // init narrowband communication
+    QueueHandle_t commandQueue = xQueueCreate(10, sizeof(message_t));   // for now we initialize the queues to 10 elements, perhaps subject to change
+    QueueHandle_t sensorDataQueue = xQueueCreate(10, sizeof(message_t));
+    init_narrowband(&commandQueue, &sensorDataQueue);
+
+    while (1) {
+        ESP_ERROR_CHECK(status_led_set_rgb(100, 100, 100));
+        vTaskDelay(pdMS_TO_TICKS(300));
+
+        ESP_ERROR_CHECK(status_led_off());
+        vTaskDelay(pdMS_TO_TICKS(300));
+        
+    }
 }
