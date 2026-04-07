@@ -40,8 +40,9 @@ namespace {
         
         TaskHandle_t rxtxTaskHandle;
         static constexpr UBaseType_t rxtxTaskNotifyIndex = 1; // index of the notification value used for receive ISR flag
-        
+
         void handleReceive();
+        std::array<uint8_t, 256> pack_messages();
         void transmit_sensor_data();
         void listen_for_command();
         static void IRAM_ATTR transmit_isr(void);
@@ -148,6 +149,41 @@ namespace {
         } else {
             ESP_LOGI(TAG, "Failed to read received packet, code %d\n", state);
         }
+    }
+
+    // return value optimization makes sure no copying takes place even when returning by value, so this is efficient
+    std::array<uint8_t, 256> NarrowbandRadio::pack_messages(message_t& fragment, bool last_packet) {
+        std::array<uint8_t, 256> buffer; // max payload size of LLCC68 is 256 bytes
+        size_t offset = 0;
+
+        if (fragment.length > 0 && fragment.length <= buffer.size()) {
+            memcpy(buffer.data(), fragment.data, fragment.length);
+            offset += fragment.length;
+            free(fragment.data); // free the message data after packing
+        } else if (fragment.length > buffer.size()) {
+            ESP_LOGE(TAG, "Fragment length %d exceeds buffer size, discarding fragment\n", fragment.length);
+            free(fragment.data);
+        }
+        
+
+        while (offset < buffer.size()) {
+            message_t msg;
+            if (xQueueReceive( *sensorDataQueue, &msg, (TickType_t) 0 ) == pdTRUE) {
+                if (offset + msg.length <= buffer.size()) {
+                    memcpy(buffer.data() + offset, msg.data, msg.length);
+                    offset += msg.length;
+                } else {
+                    // we can choose to either discard the message or stop packing further messages; for now we just stop packing
+                    break;
+                }
+                free(msg.data); // free the message data after packing
+            } else {
+                // no more messages in the queue
+                break;
+            }
+        }
+
+        return buffer;
     }
 
     void NarrowbandRadio::transmit_sensor_data() {
