@@ -123,6 +123,8 @@ namespace {
         portYIELD_FROM_ISR( xHigherPriorityTaskWoken );
     }
 
+
+    // UNFINISHED, TODO: handle defragmentation
     void NarrowbandRadio::handleReceive() {
 
         // TODO: maybe implement a static memory pool to avoid memory fragmentation in the long run
@@ -151,6 +153,7 @@ namespace {
         }
     }
 
+    // UNFINISHED
     // return value optimization makes sure no copying takes place even when returning by value, so this is efficient
     std::array<uint8_t, 256> NarrowbandRadio::pack_messages(message_t& fragment, bool last_packet) {
         std::array<uint8_t, 256> buffer; // max payload size of LLCC68 is 256 bytes
