@@ -162,6 +162,8 @@ namespace {
         }
     }
 
+    // TODO: consider if dropping messages when queue is full is acceptable
+    // TODO: ackknowledgement mechanism? -> msg_len 0 could indicate an ack msg
     // return value optimization makes sure no copying takes place even when returning by value, so this is efficient
     std::array<uint8_t, 256> NarrowbandRadio::pack_messages(QueueHandle_t* queue) {
         std::array<uint8_t, 256> buffer; // max payload size of LLCC68 is 256 bytes
@@ -207,7 +209,7 @@ namespace {
 
             } else {
                 // no more messages in the queue
-                buffer[offset] = 0; // indicate end of messages with a length of 0
+                // TODO: return length, so packet can be shorter than 256 bytes if there are no more messages to pack
                 currentTxMessage.data = nullptr;
                 currentTxMessage.length = 0;
                 currentTxMessageOffset = 0;
@@ -218,6 +220,8 @@ namespace {
         return buffer;
     }
 
+    // TODO: consider if dropping messages when queue is full is acceptable
+    // TODO: ackknowledgement mechanism? -> msg_len 0 could indicate an ack msg
     void NarrowbandRadio::unpack_messages(const std::array<uint8_t, 256>& buffer, size_t length, QueueHandle_t* queue) {
         size_t offset = 0;
 
