@@ -163,31 +163,40 @@ namespace {
     }
 
     // return value optimization makes sure no copying takes place even when returning by value, so this is efficient
-    std::array<uint8_t, 256> NarrowbandRadio::pack_messages() {
+    std::array<uint8_t, 256> NarrowbandRadio::pack_messages(QueueHandle_t* queue) {
         std::array<uint8_t, 256> buffer; // max payload size of LLCC68 is 256 bytes
         size_t offset = 0;
 
-        if (currentTxMessage.length > 0 && currentTxMessage.length + sizeof(uint8_t) <= buffer.size()) {
+        if (currentTxMessage.length > currentTxMessageOffset) {
 
-            buffer[offset++] = (uint8_t)(currentTxMessage.length & 0xFF); // store length as 1 byte, assuming max message length is 255
-            memcpy(buffer.data() + offset, currentTxMessage.data, currentTxMessage.length);
-            offset += currentTxMessage.length;
-            free(currentTxMessage.data); // free the message data after packing
-            currentTxMessage.data = nullptr;
-            currentTxMessage.length = 0;
-
-        } else if (currentTxMessage.length + sizeof(uint8_t) > buffer.size()) {
-            ESP_LOGE(TAG, "Fragment length %d exceeds buffer size, discarding fragment\n", currentTxMessage.length);
-            free(currentTxMessage.data);
-            currentTxMessage.data = nullptr;
-            currentTxMessage.length = 0;
+            size_t bytes_to_copy = std::min(currentTxMessage.length - currentTxMessageOffset, buffer.size());
+            memcpy(buffer.data(), currentTxMessage.data + currentTxMessageOffset, bytes_to_copy);
+            offset += bytes_to_copy;
+            if (currentTxMessageOffset + bytes_to_copy >= currentTxMessage.length) {
+                // message fully packed, free the message data and reset the current message    
+                free(currentTxMessage.data); // free the message data after packing
+                currentTxMessage.data = nullptr;
+                currentTxMessage.length = 0;
+                currentTxMessageOffset = 0;
+            } else {
+                // message not fully packed, update the offset for the next pack
+                currentTxMessageOffset += bytes_to_copy;
+                offset += bytes_to_copy; // this makes sure to skip the while loop
+            }
         }
-        
 
         while (offset < buffer.size()) {
             free(currentTxMessage.data); // free the previous message data before receiving the next message from the queue
-            if (xQueueReceive( *sensorDataQueue, &currentTxMessage, (TickType_t) 0 ) == pdTRUE) {
+            if (xQueueReceive( *queue, &currentTxMessage, (TickType_t) 0 ) == pdTRUE) {
                 currentTxMessageOffset = 0; // reset offset for new message
+
+                if (currentTxMessage.length == 0) {
+                    // skip empty messages
+                    continue;
+                } else if (currentTxMessage.length > 255) {
+                    ESP_LOGE(TAG, "Message length exceeds maximum of 255 bytes, truncating message\n");
+                    currentTxMessage.length = 255; // truncate message to max length
+                }
 
                 buffer[offset++] = (uint8_t)(currentTxMessage.length & 0xFF); // store length as 1 byte, assuming max message length is 255
 
@@ -198,13 +207,72 @@ namespace {
 
             } else {
                 // no more messages in the queue
+                buffer[offset] = 0; // indicate end of messages with a length of 0
                 currentTxMessage.data = nullptr;
                 currentTxMessage.length = 0;
+                currentTxMessageOffset = 0;
                 break;
             }
         }
 
         return buffer;
+    }
+
+    void NarrowbandRadio::unpack_messages(const std::array<uint8_t, 256>& buffer, size_t length, QueueHandle_t* queue) {
+        size_t offset = 0;
+
+        if (currentRxMessage.length > currentRxMessageOffset) {
+            size_t bytes_to_copy = std::min(currentRxMessage.length - currentRxMessageOffset, length);
+            memcpy(currentRxMessage.data + currentRxMessageOffset, buffer.data(), bytes_to_copy);
+            if (currentRxMessageOffset + bytes_to_copy >= currentRxMessage.length) {
+                // message fully unpacked, enqueue the message and reset the current message
+                message_t msg = {
+                    .data = currentRxMessage.data,
+                    .length = currentRxMessage.length
+                };
+
+                if (xQueueSend( *queue, (void *) &msg, ( TickType_t ) 0 ) != pdTRUE) {
+                    ESP_LOGE(TAG, "Failed to enqueue received command, command queue is full!\n");
+                    free(currentRxMessage.data); // free the message data if it cannot be enqueued
+                }
+
+                currentRxMessage.data = nullptr;
+                currentRxMessage.length = 0;
+                currentRxMessageOffset = 0;
+            } else {
+                // message not fully unpacked, update the offset for the next unpack
+                currentRxMessageOffset += bytes_to_copy;
+                offset += bytes_to_copy; // this makes sure to skip the while loop
+            }
+        }
+
+        while (offset < length) {
+            uint8_t msg_length = buffer[offset++];
+
+            uint8_t* msg_data = (uint8_t*)malloc(msg_length);
+
+            size_t bytes_to_copy = std::min((size_t)msg_length, length - offset);
+            memcpy(msg_data, buffer.data() + offset, bytes_to_copy);
+            offset += bytes_to_copy;
+
+            if (bytes_to_copy < msg_length) {
+                // message not fully unpacked, store the partial message and wait for the next buffer to unpack the rest
+                currentRxMessage.data = msg_data;
+                currentRxMessage.length = msg_length;
+                currentRxMessageOffset = bytes_to_copy;
+                break;
+            }
+
+            message_t msg = {
+                .data = msg_data,
+                .length = msg_length
+            };
+
+            if (xQueueSend( *queue, (void *) &msg, ( TickType_t ) 0 ) != pdTRUE) {
+                ESP_LOGE(TAG, "Failed to enqueue received command, command queue is full!\n");
+                free(msg_data); // free the message data if it cannot be enqueued
+            }
+        }
     }
 
     void NarrowbandRadio::transmit_sensor_data() {
