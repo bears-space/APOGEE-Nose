@@ -23,12 +23,8 @@ void app_main(void)
     QueueHandle_t sensorDataQueue = xQueueCreate(10, sizeof(message_t));
     init_narrowband(&commandQueue, &sensorDataQueue);
 
-    while (1) {
-        ESP_ERROR_CHECK(status_led_set_rgb(100, 100, 100));
-        vTaskDelay(pdMS_TO_TICKS(300));
-
-        ESP_ERROR_CHECK(status_led_off());
-        vTaskDelay(pdMS_TO_TICKS(300));
-        
+    while(true) {
+        // main loop can be used for other tasks, e.g. reading sensors and pushing data to the sensorDataQueue for transmission
+        vTaskDelay(pdMS_TO_TICKS(1000));
     }
 }

@@ -10,11 +10,13 @@
 #include "narrowband.h"
 #include "message.h"
 
+
 namespace {
 
     static const char* TAG = "Narrowband";
 
     // CLASS DEFINITION
+    template<typename RadioType>
     class NarrowbandRadio {
     private:
 
@@ -62,8 +64,55 @@ namespace {
         void init(QueueHandle_t* commandQueue, QueueHandle_t* sensorDataQueue);
     };
 
-    // static instance of the narrowband class
-    NarrowbandRadio nb_radio;
+    #ifdef CONFIG_NB_MODE_ROCKET
+    
+    class RocketRadio : public NarrowbandRadio<RocketRadio> {
+        private: 
+            void rxtx_task() {
+                ESP_LOGI(TAG, "[LLCC68] Started rxtx task!\n");
+
+                std::array<uint8_t, max_payload_size> tx_buffer;
+                while (true) {
+
+                    // TX
+                    size_t bytes_copied = pack_messages(tx_buffer, sensorDataQueue);
+                    transmit_data(std::span<uint8_t>(tx_buffer.data(), bytes_copied));
+
+                    // RX
+                    listen_for_command();
+                }
+            }
+    }
+
+    // static instance of the rocket radio class
+    RocketRadio nb_radio;
+
+    #endif
+
+    #ifdef CONFIG_NB_MODE_GROUND
+
+    class GroundRadio : public NarrowbandRadio<GroundRadio> {
+        private: 
+            void rxtx_task() {
+                ESP_LOGI(TAG, "[LLCC68] Started ground task!\n");
+
+                std::array<uint8_t, max_payload_size> tx_buffer;
+                while (true) {
+
+                    // TX
+                    size_t bytes_copied = pack_messages(tx_buffer, commandQueue);
+                    transmit_data(std::span<uint8_t>(tx_buffer.data(), bytes_copied));
+
+                    // RX
+                    listen_for_command();
+                }
+            }
+    }
+
+    // static instance of the ground radio class
+    GroundRadio nb_radio;
+
+    #endif
 
     // CLASS IMPLEMENTATION
 
@@ -109,7 +158,6 @@ namespace {
         radio.setPacketReceivedAction(receive_isr);
         radio.setPacketSentAction(transmit_isr);
 
-        // create the rx/tx task
         xTaskCreate(rxtx_task_trampoline, "rxtx", 4096, this, 1, &rxtxTaskHandle);
         configASSERT( rxtxTaskHandle != NULL );
 
@@ -338,24 +386,8 @@ namespace {
     }
 
     void NarrowbandRadio::rxtx_task_trampoline(void* param) {
-        static_cast<NarrowbandRadio*>(param)->rxtx_task();
+        static_cast<RadioType*>(param)->rxtx_task();
     }
-
-    void NarrowbandRadio::rxtx_task() {
-        ESP_LOGI(TAG, "[LLCC68] Started rxtx task!\n");
-
-        std::array<uint8_t, max_payload_size> tx_buffer;
-        while (true) {
-
-            // TX
-            size_t bytes_copied = pack_messages(tx_buffer, sensorDataQueue);
-            transmit_data(std::span<uint8_t>(tx_buffer.data(), bytes_copied));
-
-            // RX
-            listen_for_command();
-        }
-    }
-
 }
 
 // C COMPATIBILITY WRAPPERS
