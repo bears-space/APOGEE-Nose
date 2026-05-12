@@ -3,6 +3,7 @@
 #include "esp_log.h"
 #include <cstring>
 #include <cstdint>
+#include <span>
 #include <sys/types.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
@@ -36,7 +37,7 @@ namespace {
         EspHal hal;
         Module module;
         LLCC68 radio;
-        static constexpr uint8_t max_payload_size = 256; // max payload size of LLCC68 is 256 bytes
+        static constexpr uint16_t max_payload_size = 256; // max payload size of LLCC68 is 256 bytes
 
         QueueHandle_t* commandQueue;
         QueueHandle_t* sensorDataQueue;
