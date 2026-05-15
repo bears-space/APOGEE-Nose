@@ -38,10 +38,6 @@ namespace {
         EspHal hal;
         Module module;
         LLCC68 radio;
-        static constexpr uint16_t max_payload_size = 256; // max payload size of LLCC68 is 256 bytes
-
-        QueueHandle_t* commandQueue;
-        QueueHandle_t* sensorDataQueue;
          
         message_t currentTxMessage;
         message_t currentRxMessage;
@@ -51,16 +47,24 @@ namespace {
         TaskHandle_t rxtxTaskHandle;
         static constexpr UBaseType_t rxtxTaskNotifyIndex = 1; // index of the notification value used for receive ISR flag
 
-        size_t pack_messages(std::span<uint8_t> buffer, QueueHandle_t* queue);
-        void unpack_messages(const std::span<uint8_t> buffer, QueueHandle_t* queue);
-        void transmit_data(std::span<uint8_t> buffer);
-        void listen_for_command();
         void handle_receive();
         static void IRAM_ATTR transmit_isr(void);
         static void IRAM_ATTR receive_isr(void);
         static void rxtx_task_trampoline(void* param);
         void rxtx_task();
-        
+
+    protected:
+
+        static constexpr uint16_t max_payload_size = 256; // max payload size of LLCC68 is 256 bytes
+
+        QueueHandle_t* commandQueue;
+        QueueHandle_t* sensorDataQueue;
+
+        size_t pack_messages(std::span<uint8_t> buffer, QueueHandle_t* queue);
+        void unpack_messages(const std::span<uint8_t> buffer, QueueHandle_t* queue);
+        void transmit_data(std::span<uint8_t> buffer);
+        void listen_for_command();
+                
     public:
         NarrowbandRadio();
         void init(QueueHandle_t* commandQueue, QueueHandle_t* sensorDataQueue);
@@ -84,7 +88,7 @@ namespace {
                     listen_for_command();
                 }
             }
-    }
+    };
 
     // static instance of the rocket radio class
     RocketRadio nb_radio;
@@ -109,7 +113,7 @@ namespace {
                     listen_for_command();
                 }
             }
-    }
+    };
 
     // static instance of the ground radio class
     GroundRadio nb_radio;
@@ -122,13 +126,13 @@ namespace {
         : hal(SCLK_PIN, MISO_PIN, MOSI_PIN),
         module(&hal, NSS_PIN, DIO1_PIN, NRST_PIN, BUSY_PIN),
         radio(&module),
-        commandQueue(nullptr),
-        sensorDataQueue(nullptr),
         currentTxMessage{nullptr, 0},
         currentRxMessage{nullptr, 0},
         currentTxMessageOffset(0),
         currentRxMessageOffset(0),
         rxtxTaskHandle(nullptr) {}
+        commandQueue(nullptr),
+        sensorDataQueue(nullptr),
 
     void NarrowbandRadio::init(QueueHandle_t* commandQueue, QueueHandle_t* sensorDataQueue) {
         ESP_LOGI(TAG, "[LLCC68] Initializing narrowband radio...");
