@@ -275,9 +275,9 @@ class EspHal : public RadioLibHal {
       this->pinMode(this->spiSCK, OUTPUT);
       this->pinMode(this->spiMISO, INPUT);
       this->pinMode(this->spiMOSI, OUTPUT);
-      gpio_matrix_out(this->spiSCK, HSPICLK_OUT_IDX, false, false);
-      gpio_matrix_in(this->spiMISO, HSPIQ_OUT_IDX, false);
-      gpio_matrix_out(this->spiMOSI, HSPID_IN_IDX, false, false);
+      rom_gpio_matrix_out(this->spiSCK, HSPICLK_OUT_IDX, false, false);
+      rom_gpio_matrix_in(this->spiMISO, HSPIQ_OUT_IDX, false);
+      rom_gpio_matrix_out(this->spiMOSI, HSPID_IN_IDX, false, false);
     }
 
     void spiBeginTransaction() {
@@ -306,9 +306,9 @@ class EspHal : public RadioLibHal {
 
     void spiEnd() {
       // detach pins
-      gpio_matrix_out(this->spiSCK, MATRIX_DETACH_OUT_SIG, false, false);
-      gpio_matrix_in(this->spiMISO, MATRIX_DETACH_IN_LOW_PIN, false);
-      gpio_matrix_out(this->spiMOSI, MATRIX_DETACH_OUT_SIG, false, false);
+      rom_gpio_matrix_out(this->spiSCK, MATRIX_DETACH_OUT_SIG, false, false);
+      rom_gpio_matrix_in(this->spiMISO, MATRIX_DETACH_IN_LOW_PIN, false);
+      rom_gpio_matrix_out(this->spiMOSI, MATRIX_DETACH_OUT_SIG, false, false);
     }
 
   private:
