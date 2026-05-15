@@ -11,6 +11,7 @@
 #include "narrowband.h"
 #include "message.h"
 
+#define CONFIG_NB_MODE_ROCKET
 
 namespace {
 
