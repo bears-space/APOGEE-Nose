@@ -51,7 +51,6 @@ namespace {
         static void IRAM_ATTR transmit_isr(void);
         static void IRAM_ATTR receive_isr(void);
         static void rxtx_task_trampoline(void* param);
-        void rxtx_task();
 
     protected:
 
@@ -68,12 +67,13 @@ namespace {
     public:
         NarrowbandRadio();
         void init(QueueHandle_t* commandQueue, QueueHandle_t* sensorDataQueue);
+        void rxtx_task();
     };
 
     #ifdef CONFIG_NB_MODE_ROCKET
     
     class RocketRadio : public NarrowbandRadio<RocketRadio> {
-        private: 
+        public: 
             void rxtx_task() {
                 ESP_LOGI(TAG, "[LLCC68] Started rxtx task!\n");
 
@@ -98,7 +98,7 @@ namespace {
     #ifdef CONFIG_NB_MODE_GROUND
 
     class GroundRadio : public NarrowbandRadio<GroundRadio> {
-        private: 
+        public: 
             void rxtx_task() {
                 ESP_LOGI(TAG, "[LLCC68] Started ground task!\n");
 
@@ -122,7 +122,8 @@ namespace {
 
     // CLASS IMPLEMENTATION
 
-    NarrowbandRadio::NarrowbandRadio()
+    template<typename RadioType>
+    NarrowbandRadio<RadioType>::NarrowbandRadio()
         : hal(SCLK_PIN, MISO_PIN, MOSI_PIN),
         module(&hal, NSS_PIN, DIO1_PIN, NRST_PIN, BUSY_PIN),
         radio(&module),
@@ -130,11 +131,13 @@ namespace {
         currentRxMessage{nullptr, 0},
         currentTxMessageOffset(0),
         currentRxMessageOffset(0),
-        rxtxTaskHandle(nullptr) {}
+        rxtxTaskHandle(nullptr),
         commandQueue(nullptr),
-        sensorDataQueue(nullptr),
+        sensorDataQueue(nullptr)
+    {}
 
-    void NarrowbandRadio::init(QueueHandle_t* commandQueue, QueueHandle_t* sensorDataQueue) {
+    template<typename RadioType>
+    void NarrowbandRadio<RadioType>::init(QueueHandle_t* commandQueue, QueueHandle_t* sensorDataQueue) {
         ESP_LOGI(TAG, "[LLCC68] Initializing narrowband radio...");
         
         // TODO: remove magic numbers, use config values instead
@@ -169,7 +172,8 @@ namespace {
 
     }
 
-    void IRAM_ATTR NarrowbandRadio::transmit_isr(void) {
+    template<typename RadioType>
+    void IRAM_ATTR NarrowbandRadio<RadioType>::transmit_isr(void) {
         BaseType_t xHigherPriorityTaskWoken = pdFALSE;
 
         configASSERT( nb_radio.rxtxTaskHandle != NULL );
@@ -179,7 +183,8 @@ namespace {
     }
 
     // ISR callback stored in IRAM; just sets the atomic flag
-    void IRAM_ATTR NarrowbandRadio::receive_isr(void) {
+    template<typename RadioType>
+    void IRAM_ATTR NarrowbandRadio<RadioType>::receive_isr(void) {
         BaseType_t xHigherPriorityTaskWoken = pdFALSE;
 
         configASSERT( nb_radio.rxtxTaskHandle != NULL );
@@ -192,7 +197,8 @@ namespace {
     // TODO: consider if dropping messages when queue is full is acceptable
     // TODO: ackknowledgement mechanism? -> msg_len 0 could indicate an ack msg
     // returns number of bytes packed into buffer
-    size_t NarrowbandRadio::pack_messages(std::span<uint8_t> buffer, QueueHandle_t* queue) {
+    template<typename RadioType>
+    size_t NarrowbandRadio<RadioType>::pack_messages(std::span<uint8_t> buffer, QueueHandle_t* queue) {
         size_t offset = 0;
 
         if (currentTxMessage.length > currentTxMessageOffset) {
@@ -250,7 +256,8 @@ namespace {
 
     // TODO: consider if dropping messages when queue is full is acceptable
     // TODO: ackknowledgement mechanism? -> msg_len 0 could indicate an ack msg
-    void NarrowbandRadio::unpack_messages(const std::span<uint8_t> buffer, QueueHandle_t* queue) {
+    template<typename RadioType>
+    void NarrowbandRadio<RadioType>::unpack_messages(const std::span<uint8_t> buffer, QueueHandle_t* queue) {
         size_t length = buffer.size();
         size_t offset = 0;
 
@@ -314,7 +321,8 @@ namespace {
         }
     }
 
-    void NarrowbandRadio::transmit_data(std::span<uint8_t> buffer) {
+    template<typename RadioType>
+    void NarrowbandRadio<RadioType>::transmit_data(std::span<uint8_t> buffer) {
 
         int state = radio.startTransmit(buffer.data(), buffer.size());
         if (state != RADIOLIB_ERR_NONE) {
@@ -337,7 +345,8 @@ namespace {
 
     }
 
-    void NarrowbandRadio::handle_receive() {
+    template<typename RadioType>
+    void NarrowbandRadio<RadioType>::handle_receive() {
 
         // TODO: maybe implement a static memory pool to avoid memory fragmentation in the long run
         size_t len = radio.getPacketLength();
@@ -361,7 +370,8 @@ namespace {
     }
 
     // TODO: send back ACKknowledgement for received commands, to give sender the option to retry if ACK is not received within a certain time frame
-    void NarrowbandRadio::listen_for_command() {
+    template<typename RadioType>
+    void NarrowbandRadio<RadioType>::listen_for_command() {
         int state = radio.startReceive();
         if (state == RADIOLIB_ERR_NONE) {
             ESP_LOGI(TAG, "Waiting for a packet...\n");
@@ -391,7 +401,8 @@ namespace {
         }
     }
 
-    void NarrowbandRadio::rxtx_task_trampoline(void* param) {
+    template<typename RadioType>
+    void NarrowbandRadio<RadioType>::rxtx_task_trampoline(void* param) {
         static_cast<RadioType*>(param)->rxtx_task();
     }
 }
