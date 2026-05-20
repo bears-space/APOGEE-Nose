@@ -21,7 +21,7 @@ void app_main(void)
     // init narrowband communication
     QueueHandle_t commandQueue = xQueueCreate(10, sizeof(message_t));   // for now we initialize the queues to 10 elements, perhaps subject to change
     QueueHandle_t sensorDataQueue = xQueueCreate(10, sizeof(message_t));
-    init_narrowband(&commandQueue, &sensorDataQueue);
+    init_narrowband(commandQueue, sensorDataQueue);
 
     while(true) {
         // main loop can be used for other tasks, e.g. reading sensors and pushing data to the sensorDataQueue for transmission

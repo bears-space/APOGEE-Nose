@@ -56,17 +56,17 @@ namespace {
 
         static constexpr uint16_t max_payload_size = 256; // max payload size of LLCC68 is 256 bytes
 
-        QueueHandle_t* commandQueue;
-        QueueHandle_t* sensorDataQueue;
+        QueueHandle_t commandQueue;
+        QueueHandle_t sensorDataQueue;
 
-        size_t pack_messages(std::span<uint8_t> buffer, QueueHandle_t* queue);
-        void unpack_messages(const std::span<uint8_t> buffer, QueueHandle_t* queue);
+        size_t pack_messages(std::span<uint8_t> buffer, QueueHandle_t queue);
+        void unpack_messages(const std::span<uint8_t> buffer, QueueHandle_t queue);
         void transmit_data(std::span<uint8_t> buffer);
         void listen_for_command();
                 
     public:
         NarrowbandRadio();
-        void init(QueueHandle_t* commandQueue, QueueHandle_t* sensorDataQueue);
+        void init(QueueHandle_t commandQueue, QueueHandle_t sensorDataQueue);
         void rxtx_task();
     };
 
@@ -137,7 +137,7 @@ namespace {
     {}
 
     template<typename RadioType>
-    void NarrowbandRadio<RadioType>::init(QueueHandle_t* commandQueue, QueueHandle_t* sensorDataQueue) {
+    void NarrowbandRadio<RadioType>::init(QueueHandle_t commandQueue, QueueHandle_t sensorDataQueue) {
         ESP_LOGI(TAG, "[LLCC68] Initializing narrowband radio...");
         
         // TODO: remove magic numbers, use config values instead
@@ -198,7 +198,7 @@ namespace {
     // TODO: ackknowledgement mechanism? -> msg_len 0 could indicate an ack msg
     // returns number of bytes packed into buffer
     template<typename RadioType>
-    size_t NarrowbandRadio<RadioType>::pack_messages(std::span<uint8_t> buffer, QueueHandle_t* queue) {
+    size_t NarrowbandRadio<RadioType>::pack_messages(std::span<uint8_t> buffer, QueueHandle_t queue) {
         size_t offset = 0;
 
         if (currentTxMessage.length > currentTxMessageOffset) {
@@ -221,7 +221,7 @@ namespace {
 
         while (offset < buffer.size()) {
             free(currentTxMessage.data); // free the previous message data before receiving the next message from the queue
-            if (xQueueReceive( *queue, &currentTxMessage, (TickType_t) 0 ) == pdTRUE) {
+            if (xQueueReceive( queue, &currentTxMessage, (TickType_t) 0 ) == pdTRUE) {
                 currentTxMessageOffset = 0; // reset offset for new message
 
                 if (currentTxMessage.length == 0) {
@@ -257,7 +257,7 @@ namespace {
     // TODO: consider if dropping messages when queue is full is acceptable
     // TODO: ackknowledgement mechanism? -> msg_len 0 could indicate an ack msg
     template<typename RadioType>
-    void NarrowbandRadio<RadioType>::unpack_messages(const std::span<uint8_t> buffer, QueueHandle_t* queue) {
+    void NarrowbandRadio<RadioType>::unpack_messages(const std::span<uint8_t> buffer, QueueHandle_t queue) {
         size_t length = buffer.size();
         size_t offset = 0;
 
@@ -271,7 +271,7 @@ namespace {
                     .length = currentRxMessage.length
                 };
 
-                if (xQueueSend( *queue, (void *) &msg, ( TickType_t ) 0 ) != pdTRUE) {
+                if (xQueueSend( queue, (void *) &msg, ( TickType_t ) 0 ) != pdTRUE) {
                     ESP_LOGE(TAG, "Failed to enqueue received command, command queue is full!\n");
                     free(currentRxMessage.data); // free the message data if it cannot be enqueued
                 }
@@ -314,7 +314,7 @@ namespace {
                 .length = msg_length
             };
 
-            if (xQueueSend( *queue, (void *) &msg, ( TickType_t ) 0 ) != pdTRUE) {
+            if (xQueueSend( queue, (void *) &msg, ( TickType_t ) 0 ) != pdTRUE) {
                 ESP_LOGE(TAG, "Failed to enqueue received command, command queue is full!\n");
                 free(msg_data); // free the message data if it cannot be enqueued
             }
@@ -410,7 +410,7 @@ namespace {
 // C COMPATIBILITY WRAPPERS
 
 extern "C" {
-    void init_narrowband(QueueHandle_t* commandQueue, QueueHandle_t* sensorDataQueue) {
+    void init_narrowband(QueueHandle_t commandQueue, QueueHandle_t sensorDataQueue) {
         nb_radio.init(commandQueue, sensorDataQueue);
     }
 }
