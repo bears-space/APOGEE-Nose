@@ -12,7 +12,7 @@ extern "C" {
 * @param commandQueue pointer to FreeRTOS queue for data received by narrowband module
 * @param sensorDataQueue pointer to FreeRTOS queue for data to be transmitted by narrowband module
 */
-void init_narrowband(QueueHandle_t* commandQueue, QueueHandle_t* sensorDataQueue);
+void init_narrowband(QueueHandle_t commandQueue, QueueHandle_t sensorDataQueue);
 
 #ifdef __cplusplus
 }
