@@ -1,6 +1,10 @@
 #include <RadioLib.h>
 #include "EspHal.h"
+#include "esp_err.h"
 #include "esp_log.h"
+#include "sdkconfig.h"
+#include <algorithm>
+#include <array>
 #include <cstring>
 #include <cstdint>
 #include <span>
@@ -10,8 +14,6 @@
 #include <freertos/task.h>
 #include "narrowband.h"
 #include "message.h"
-
-#define CONFIG_NB_MODE_ROCKET
 
 namespace {
 
@@ -66,11 +68,11 @@ namespace {
                 
     public:
         NarrowbandRadio();
-        void init(QueueHandle_t commandQueue, QueueHandle_t sensorDataQueue);
+        esp_err_t init(QueueHandle_t commandQueue, QueueHandle_t sensorDataQueue);
         void rxtx_task();
     };
 
-    #ifdef CONFIG_NB_MODE_ROCKET
+    #if CONFIG_NB_RADIO_MODE_ROCKET
     
     class RocketRadio : public NarrowbandRadio<RocketRadio> {
         public: 
@@ -93,9 +95,7 @@ namespace {
     // static instance of the rocket radio class
     RocketRadio nb_radio;
 
-    #endif
-
-    #ifdef CONFIG_NB_MODE_GROUND
+    #elif CONFIG_NB_RADIO_MODE_GROUND
 
     class GroundRadio : public NarrowbandRadio<GroundRadio> {
         public: 
@@ -118,6 +118,8 @@ namespace {
     // static instance of the ground radio class
     GroundRadio nb_radio;
 
+    #else
+    #error "No narrowband radio mode selected"
     #endif
 
     // CLASS IMPLEMENTATION
@@ -137,15 +139,23 @@ namespace {
     {}
 
     template<typename RadioType>
-    void NarrowbandRadio<RadioType>::init(QueueHandle_t commandQueue, QueueHandle_t sensorDataQueue) {
+    esp_err_t NarrowbandRadio<RadioType>::init(QueueHandle_t commandQueue, QueueHandle_t sensorDataQueue) {
         ESP_LOGI(TAG, "[LLCC68] Initializing narrowband radio...");
+
+        if (commandQueue == nullptr || sensorDataQueue == nullptr) {
+            ESP_LOGE(TAG, "Narrowband queue handle is NULL");
+            return ESP_ERR_INVALID_ARG;
+        }
+
+        this->commandQueue = commandQueue;
+        this->sensorDataQueue = sensorDataQueue;
         
         // TODO: remove magic numbers, use config values instead
         // freq 434 Mhz, bitrate 2.4 kHz, frequency deviation 2.4 kHz, receiver bandwidth DSB 11.7 kHz, power 22 dBm, preamble length 32 bit, TCXO voltage 0 V, useRegulatorLDO false
         int state = radio.beginFSK(434, 2.4, 2.4, 11.7, 22, 32, 0, false);
         if (state != RADIOLIB_ERR_NONE) {
-            ESP_LOGE(TAG, "beginFSK failed, code %d (fatal)\n", state);
-            abort(); // fatal error, cannot continue without radio
+            ESP_LOGE(TAG, "beginFSK failed, code %d", state);
+            return ESP_FAIL;
         }
 
         // RXEN pin: 16
@@ -158,8 +168,8 @@ namespace {
         // for more details, see LLCC68 datasheet, this is the highest power setting, with 22 dBm set in beginFSK
         state = radio.setPaConfig(0x04, 0x00, 0x07, 0x01);
         if (state != RADIOLIB_ERR_NONE) {
-            ESP_LOGE(TAG, "PA config failed, code %d (fatal)\n", state);
-            abort();
+            ESP_LOGE(TAG, "PA config failed, code %d", state);
+            return ESP_FAIL;
         }
         ESP_LOGI(TAG, "[LLCC68] PA config configured!\n");
 
@@ -167,9 +177,15 @@ namespace {
         radio.setPacketReceivedAction(receive_isr);
         radio.setPacketSentAction(transmit_isr);
 
-        xTaskCreate(rxtx_task_trampoline, "rxtx", 4096, this, 1, &rxtxTaskHandle);
-        configASSERT( rxtxTaskHandle != NULL );
+        BaseType_t task_ok =
+            xTaskCreate(rxtx_task_trampoline, "rxtx", 4096, this, 1, &rxtxTaskHandle);
+        if (task_ok != pdPASS || rxtxTaskHandle == nullptr) {
+            ESP_LOGE(TAG, "Failed to create rxtx task");
+            rxtxTaskHandle = nullptr;
+            return ESP_ERR_NO_MEM;
+        }
 
+        return ESP_OK;
     }
 
     template<typename RadioType>
@@ -410,7 +426,7 @@ namespace {
 // C COMPATIBILITY WRAPPERS
 
 extern "C" {
-    void init_narrowband(QueueHandle_t commandQueue, QueueHandle_t sensorDataQueue) {
-        nb_radio.init(commandQueue, sensorDataQueue);
+    esp_err_t init_narrowband(QueueHandle_t commandQueue, QueueHandle_t sensorDataQueue) {
+        return nb_radio.init(commandQueue, sensorDataQueue);
     }
 }
