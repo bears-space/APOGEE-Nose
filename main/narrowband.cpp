@@ -45,7 +45,7 @@ namespace {
         size_t currentRxMessageOffset;
         
         TaskHandle_t rxtxTaskHandle;
-        static constexpr UBaseType_t rxtxTaskNotifyIndex = 1; // index of the notification value used for receive ISR flag
+        static constexpr UBaseType_t rxtxTaskNotifyIndex = 0; // index of the notification value used for receive ISR flag
 
         void handle_receive();
         static void IRAM_ATTR transmit_isr(void);
@@ -81,6 +81,9 @@ namespace {
                 while (true) {
 
                     // TX
+                    uint8_t tx_data[] = "Hello from the rocket!";
+                    message_t msg = {tx_data, 24};
+                    xQueueSend(sensorDataQueue, &msg, portMAX_DELAY);
                     size_t bytes_copied = pack_messages(tx_buffer, sensorDataQueue);
                     transmit_data(std::span<uint8_t>(tx_buffer.data(), bytes_copied));
 
@@ -147,6 +150,9 @@ namespace {
             ESP_LOGE(TAG, "beginFSK failed, code %d (fatal)\n", state);
             abort(); // fatal error, cannot continue without radio
         }
+
+        this->commandQueue = commandQueue;
+        this->sensorDataQueue = sensorDataQueue;
 
         // RXEN pin: 16
         // TXEN pin controlled via dio2
