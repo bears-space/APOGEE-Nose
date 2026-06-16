@@ -151,6 +151,7 @@ class Esp32S3Hal : public RadioLibHal {
         .data5_io_num = -1,
         .data6_io_num = -1,
         .data7_io_num = -1,
+        .data_io_default_level = false,
         .max_transfer_sz = 4096,
         .flags = 0,
         .isr_cpu_id = ESP_INTR_CPU_AFFINITY_AUTO,
