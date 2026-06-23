@@ -102,6 +102,7 @@ class EspHal : public RadioLibHal {
       return((unsigned long)(esp_timer_get_time()));
     }
 
+
     long pulseIn(uint32_t pin, uint32_t state, unsigned long timeout) override {
       if(pin == RADIOLIB_NC) {
         return(0);
@@ -110,30 +111,13 @@ class EspHal : public RadioLibHal {
       this->pinMode(pin, INPUT);
       uint32_t start = this->micros();
 
-      // wait for any previous pulse to end
       while(this->digitalRead(pin) == state) {
         if((this->micros() - start) > timeout) {
           return(0);
         }
       }
 
-      // wait for the pulse to start
-      while(this->digitalRead(pin) != state) {
-        if((this->micros() - start) > timeout) {
-          return(0);
-        }
-      }
-
-      uint32_t pulseStart = this->micros();
-
-      // wait for the pulse to end
-      while(this->digitalRead(pin) == state) {
-        if((this->micros() - pulseStart) > timeout) {
-          return(0);
-        }
-      }
-
-      return(this->micros() - pulseStart);
+      return(this->micros() - start);
     }
 
     void spiBegin() {
