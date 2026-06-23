@@ -19,10 +19,10 @@
 #define RISING                      (0x01)   // GPIO_INTR_POSEDGE
 #define FALLING                     (0x02)   // GPIO_INTR_NEGEDGE
 
-class Esp32S3Hal : public RadioLibHal {
+class EspHal : public RadioLibHal {
   public:
     // default constructor - initializes the base HAL and any needed private members
-    Esp32S3Hal(int8_t sck, int8_t miso, int8_t mosi, spi_host_device_t host = SPI2_HOST)
+    EspHal(int8_t sck, int8_t miso, int8_t mosi, spi_host_device_t host = SPI2_HOST)
       : RadioLibHal(INPUT, OUTPUT, LOW, HIGH, RISING, FALLING),
         spiSCK(sck), spiMISO(miso), spiMOSI(mosi), spiHost(host), spiHandle(nullptr) {
     }
@@ -169,10 +169,13 @@ class Esp32S3Hal : public RadioLibHal {
         .address_bits = 0,
         .dummy_bits = 0,
         .mode = 0,                // SPI mode 0 (CPOL=0, CPHA=0)
+        .clock_source = SPI_CLK_SRC_DEFAULT,
+        .duty_cycle_pos = 128,      // 50% duty cycle
         .cs_ena_pretrans = 0,
         .cs_ena_posttrans = 0,
         .clock_speed_hz = 2000000, // 2 MHz default
         .input_delay_ns = 0,
+        .sample_point = SPI_SAMPLING_POINT_PHASE_0,
         .spics_io_num = -1,        // CS is handled by RadioLib via digitalWrite()
         .flags = 0,
         .queue_size = 1,
@@ -198,6 +201,7 @@ class Esp32S3Hal : public RadioLibHal {
         .addr = 0,
         .length = 8,
         .rxlength = 8,
+        .override_freq_hz = 0,
         .user = nullptr,
         .tx_buffer = &b,
         .rx_buffer = &rx
@@ -216,6 +220,7 @@ class Esp32S3Hal : public RadioLibHal {
         .addr = 0,
         .length = len * 8,
         .rxlength = len * 8,
+        .override_freq_hz = 0,
         .user = nullptr,
         .tx_buffer = out,
         .rx_buffer = in
