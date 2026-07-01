@@ -1,5 +1,4 @@
 #include <RadioLib.h>
-#include "EspHal.h"
 #include "esp_log.h"
 #include <cstring>
 #include <cstdint>
@@ -10,6 +9,14 @@
 #include <freertos/task.h>
 #include "narrowband.h"
 #include "message.h"
+
+#define LOW                         (0x0)
+#define HIGH                        (0x1)
+#define INPUT                       (0x01)
+#define OUTPUT                      (0x03)
+#define RISING                      (0x01)
+#define FALLING                     (0x02)
+
 
 #define CONFIG_NB_MODE_ROCKET
 
@@ -23,14 +30,14 @@ namespace {
     private:
 
         // pin definitions
-        static constexpr int SCLK_PIN = 14;
-        static constexpr int MISO_PIN = 12;
-        static constexpr int MOSI_PIN = 13;
-        static constexpr int NSS_PIN  = 19;
-        static constexpr int DIO1_PIN = 26;
-        static constexpr int NRST_PIN = 18;
-        static constexpr int BUSY_PIN = 21;
-        static constexpr int RXEN_PIN = 16;
+        static constexpr int SCLK_PIN =  6;
+        static constexpr int MISO_PIN =  4;
+        static constexpr int MOSI_PIN =  5;
+        static constexpr int NSS_PIN  =  7;
+        static constexpr int DIO1_PIN =  2;
+        static constexpr int NRST_PIN =  8;
+        static constexpr int BUSY_PIN =  9;
+        static constexpr int RXEN_PIN = 15;
 
         static constexpr uint16_t rxtx_interval_ms = 500;
         static constexpr uint32_t tx_timeout_ms = 500;

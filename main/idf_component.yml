@@ -18,4 +18,4 @@ dependencies:
   # use specific commit sha that fixes 
   radiolib:
     git: "https://github.com/jgromes/Radiolib.git"
-    version: "258d546c34c02ac8a43ff5ee322e47162a144429"
+    version: "10e7925db2727e1f5c1c796191905d0a7d955eec"
