@@ -10,13 +10,6 @@
 #include "narrowband.h"
 #include "message.h"
 
-#define LOW                         (0x0)
-#define HIGH                        (0x1)
-#define INPUT                       (0x01)
-#define OUTPUT                      (0x03)
-#define RISING                      (0x01)
-#define FALLING                     (0x02)
-
 
 #define CONFIG_NB_MODE_ROCKET
 
@@ -31,13 +24,13 @@ namespace {
 
         // pin definitions
         static constexpr int SCLK_PIN =  6;
-        static constexpr int MISO_PIN =  4;
-        static constexpr int MOSI_PIN =  5;
-        static constexpr int NSS_PIN  =  7;
-        static constexpr int DIO1_PIN =  2;
-        static constexpr int NRST_PIN =  8;
-        static constexpr int BUSY_PIN =  9;
-        static constexpr int RXEN_PIN = 15;
+        static constexpr int MISO_PIN =  7;
+        static constexpr int MOSI_PIN =  2;
+        static constexpr int NSS_PIN  = 18;
+        static constexpr int DIO1_PIN =  1;
+        static constexpr int NRST_PIN =  0;
+        static constexpr int BUSY_PIN =  3;
+        static constexpr int RXEN_PIN = 14;
 
         static constexpr uint16_t rxtx_interval_ms = 500;
         static constexpr uint32_t tx_timeout_ms = 500;
