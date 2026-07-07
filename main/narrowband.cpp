@@ -32,9 +32,6 @@ namespace {
         static constexpr int BUSY_PIN =  3;
         static constexpr int RXEN_PIN = 14;
 
-        static constexpr uint16_t rxtx_interval_ms = 500;
-        static constexpr uint32_t tx_timeout_ms = 500;
-
         EspHal hal;
         Module module;
         LLCC68 radio;
@@ -55,6 +52,8 @@ namespace {
     protected:
 
         static constexpr uint16_t max_payload_size = 256; // max payload size of LLCC68 is 256 bytes
+        static constexpr uint16_t rxtx_interval_ms = 500;
+        static constexpr uint32_t tx_timeout_ms = 500;
 
         QueueHandle_t commandQueue;
         QueueHandle_t sensorDataQueue;
@@ -62,7 +61,7 @@ namespace {
         size_t pack_messages(std::span<uint8_t> buffer, QueueHandle_t queue);
         void unpack_messages(const std::span<uint8_t> buffer, QueueHandle_t queue);
         void transmit_data(std::span<uint8_t> buffer);
-        void listen_for_command();
+        bool listen(uint16_t timeout_ms, bool return_on_receive);
                 
     public:
         NarrowbandRadio();
@@ -91,7 +90,11 @@ namespace {
                     transmit_data(std::span<uint8_t>(tx_buffer.data(), bytes_copied));
 
                     // RX
-                    listen_for_command();
+                    bool packet_received = listen(rxtx_interval_ms, false);
+                    if (packet_received) {
+                        ESP_LOGI(TAG, "Packet received from ground!\n");
+                    }
+
                 }
             }
     };
@@ -111,12 +114,19 @@ namespace {
                 std::array<uint8_t, max_payload_size> tx_buffer;
                 while (true) {
 
-                    // TX
+                    // RX
+                    bool packet_received = listen(2*rxtx_interval_ms, true);
+                    if (!packet_received) {
+                        ESP_LOGI(TAG, "No packet received within timeout. Rocket not available.\n");
+                        continue; // no rocket data received, continue listening
+                    }
+                    
+                    ESP_LOGI(TAG, "Packet received from rocket!\n");
+
+                    // TX - send a command to rocket
                     size_t bytes_copied = pack_messages(tx_buffer, commandQueue);
                     transmit_data(std::span<uint8_t>(tx_buffer.data(), bytes_copied));
 
-                    // RX
-                    listen_for_command();
                 }
             }
     };
@@ -384,22 +394,32 @@ namespace {
 
     // TODO: send back ACKknowledgement for received commands, to give sender the option to retry if ACK is not received within a certain time frame
     template<typename RadioType>
-    void NarrowbandRadio<RadioType>::listen_for_command() {
+    bool NarrowbandRadio<RadioType>::listen(uint16_t timeout_ms, bool return_on_receive) {
         int state = radio.startReceive();
         if (state == RADIOLIB_ERR_NONE) {
             ESP_LOGI(TAG, "Waiting for a packet...\n");
         } else {
             ESP_LOGI(TAG, "failed to start receiver, code %d\n", state);
+            return false;
         }
+
+        bool packet_received = false;
 
         // receive for 0.5 s (the amount specified by rxtx_interval_ms)
         TickType_t start = xTaskGetTickCount();
         uint16_t elapsed_time_ms = 0;
         uint32_t ulNotificationValue;
-        while (elapsed_time_ms < rxtx_interval_ms) {
-            ulNotificationValue = ulTaskNotifyTakeIndexed(rxtxTaskNotifyIndex, pdTRUE, pdMS_TO_TICKS(rxtx_interval_ms - elapsed_time_ms));
+        while (elapsed_time_ms < timeout_ms) {
+            ulNotificationValue = ulTaskNotifyTakeIndexed(rxtxTaskNotifyIndex, pdTRUE, pdMS_TO_TICKS(timeout_ms - elapsed_time_ms));
             if (ulNotificationValue == 1) {
+
                 handle_receive();
+                packet_received = true;
+
+                if (return_on_receive) {
+                    break; // exit the loop if we want to return after receiving a packet
+                }
+
                 elapsed_time_ms = pdTICKS_TO_MS(xTaskGetTickCount() - start);
             } else {
                 // timeout, no packet received within the interval
@@ -412,6 +432,7 @@ namespace {
         if (state != RADIOLIB_ERR_NONE) {
             ESP_LOGI(TAG, "failed to finish receive, code %d\n", state);
         }
+        return packet_received;
     }
 
     template<typename RadioType>
