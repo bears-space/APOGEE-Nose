@@ -165,7 +165,7 @@ namespace {
         ESP_LOGI(TAG, "success!\n");
 
         // for more details, see LLCC68 datasheet, this is the highest power setting, with 22 dBm set in beginFSK
-        state = radio.setPaConfig(0x02, 0x00, 0x02, 0x01);
+        state = radio.setPaConfig(0x04, 0x00, 0x07, 0x01);
         if (state != RADIOLIB_ERR_NONE) {
             ESP_LOGE(TAG, "PA config failed, code %d (fatal)\n", state);
             abort();
