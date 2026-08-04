@@ -108,6 +108,59 @@ menu "Vigilant Engine Configuration: LEDs"
         depends on VE_STATUS_LED_MODE_BLINK
 endmenu
 
+menu "APOGEE GPS (u-blox NEO-M9N)"
+    config GPS_ENABLE
+        bool "Enable GPS"
+        default y
+        help
+            Enable the NEO-M9N UART receiver and NMEA parser task.
+
+    config GPS_UART_PORT
+        int "GPS UART port"
+        range 0 2
+        default 1
+        depends on GPS_ENABLE
+        help
+            Hardware UART used for the GPS. UART0 is commonly reserved for the
+            console, so UART1 is the recommended default.
+
+    config GPS_UART_RX_GPIO
+        int "ESP RX GPIO (connected to GPS TX)"
+        range 0 64
+        default 47
+        depends on GPS_ENABLE
+
+    config GPS_UART_TX_GPIO
+        int "ESP TX GPIO (connected to GPS RX)"
+        range 0 64
+        default 48
+        depends on GPS_ENABLE
+
+    config GPS_UART_BAUD_RATE
+        int "GPS UART baud rate"
+        range 4800 921600
+        default 38400
+        depends on GPS_ENABLE
+        help
+            The NEO-M9N-00B factory default is 38400 baud, 8 data bits, no
+            parity, and one stop bit.
+
+    config GPS_LOG_FIXES
+        bool "Periodically log GPS fixes"
+        default y
+        depends on GPS_ENABLE
+        help
+            Log fix state changes and a position summary every ten seconds.
+
+    config GPS_LOG_DIAGNOSTICS
+        bool "Periodically log satellite signal diagnostics"
+        default y
+        depends on GPS_ENABLE
+        help
+            Log GSV carrier-to-noise information for each GNSS and signal every
+            ten seconds, plus changes between no-fix, 2D, and 3D navigation.
+endmenu
+
 menu "Vigilant Engine Configuration: WiFi"
     # --- Wifi Settings ---
     config VE_STA_SSID

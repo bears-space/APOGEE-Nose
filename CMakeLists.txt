@@ -14,6 +14,12 @@ if(NOT DEFINED ENV{IDF_PATH} OR "$ENV{IDF_PATH}" STREQUAL "")
     "Generic CMake Tools launches do not load the ESP-IDF environment automatically.")
 endif()
 
+# GPIO47/48 are ESP32-S3 pins, and the recovery project already uses this
+# target by default. Explicit IDF_TARGET values (for example in CI) still win.
+if(NOT DEFINED IDF_TARGET AND NOT DEFINED ENV{IDF_TARGET})
+  set(IDF_TARGET "esp32s3")
+endif()
+
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 
 # "Trim" the build. Include the minimal set of components, main, and anything it depends on.

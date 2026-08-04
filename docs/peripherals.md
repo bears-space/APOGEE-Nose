@@ -5,6 +5,7 @@ Vigilant Engine includes drivers and integration for common peripherals used acr
 ## Supported peripherals
 
 - **WS2812B**: Addressable RGB LEDs (status indication, effects)
+- **u-blox NEO-M9N**: UART GNSS receiver with NMEA position parsing
 - **TCAN4550-Q1**: SPI CAN controller **(NOT IMPLEMENTED!)**
 - **TCAN332**: CAN transceiver **(NOT IMPLEMENTED!)**
 
@@ -15,6 +16,11 @@ These peripherals are wrapped behind a common abstraction layer to simplify reus
 Vigilant Engine also provides an optional shared I2C master interface for external sensors and peripherals.
 
 For setup and API usage, see the [I2C Interface](./i2c-interface.md) page.
+
+## GPS
+
+The application supports a u-blox NEO-M9N connected over UART. See the
+[NEO-M9N GPS](./gps.md) page for wiring, configuration, and API usage.
 
 ### Status LED
 

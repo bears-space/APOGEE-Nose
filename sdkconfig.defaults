@@ -2,6 +2,9 @@
 CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
 CONFIG_ESPTOOLPY_FLASHSIZE="4MB"
 
+# Keep GPS troubleshooting output enabled in fresh build directories.
+CONFIG_GPS_LOG_DIAGNOSTICS=y
+
 #
 # Partition Table
 #
