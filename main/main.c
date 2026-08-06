@@ -6,8 +6,7 @@
 #include "freertos/task.h"
 #include "driver/gpio.h"
 
-#include "message.h"
-#include "narrowband.h"
+#include "e220m30s.h"
 
 // static const char *TAG = "app_main";
 

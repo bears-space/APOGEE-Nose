@@ -14,8 +14,3 @@ dependencies:
   #   # `public` flag doesn't have an effect dependencies of the `main` component.
   #   # All dependencies of `main` are public by default.
   #   public: true
-
-  # use specific commit sha that fixes 
-  radiolib:
-    git: "https://github.com/jgromes/Radiolib.git"
-    version: "10e7925db2727e1f5c1c796191905d0a7d955eec"

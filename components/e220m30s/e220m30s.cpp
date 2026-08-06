@@ -7,8 +7,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
 #include <freertos/task.h>
-#include "narrowband.h"
-#include "message.h"
+#include "e220m30s.h"
 
 
 #define CONFIG_NB_MODE_ROCKET
@@ -340,6 +339,7 @@ namespace {
         }
     }
 
+    // TODO: add tx_timeout_ms as parameter to allow for different timeouts for different messages
     template<typename RadioType>
     void NarrowbandRadio<RadioType>::transmit_data(std::span<uint8_t> buffer) {
         if (buffer.size() == 0) {
