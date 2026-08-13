@@ -1,450 +1,441 @@
+#include "e220m30s.h"
+
 #include <RadioLib.h>
-#include "esp_log.h"
-#include <cstring>
-#include <cstdint>
-#include <span>
-#include <sys/types.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
 #include <freertos/task.h>
-#include "e220m30s.h"
 
+#include <algorithm>
+#include <array>
+#include <cstdint>
+#include <cstdlib>
+#include <cstring>
+#include <span>
 
-#define CONFIG_NB_MODE_ROCKET
+#include "esp_log.h"
 
 namespace {
 
-    static const char* TAG = "Narrowband";
+static const char* TAG = "Narrowband";
 
-    // CLASS DEFINITION
-    template<typename RadioType>
-    class NarrowbandRadio {
-    private:
+// radio role is selected in menuconfig (main/Kconfig.projbuild, NB_RADIO_MODE)
+#if !defined(CONFIG_NB_RADIO_MODE_ROCKET) && \
+    !defined(CONFIG_NB_RADIO_MODE_GROUND)
+#error "NB_RADIO_MODE is not set. Select rocket or ground mode in menuconfig."
+#endif
 
-        // pin definitions
-        static constexpr int SCLK_PIN =  6;
-        static constexpr int MISO_PIN =  7;
-        static constexpr int MOSI_PIN =  2;
-        static constexpr int NSS_PIN  = 18;
-        static constexpr int DIO1_PIN =  1;
-        static constexpr int NRST_PIN =  0;
-        static constexpr int BUSY_PIN =  3;
-        static constexpr int RXEN_PIN = 14;
+template <typename RadioType>
+class NarrowbandRadio {
+   private:
+    // pin definitions
+    static constexpr int SCLK_PIN = 12;
+    static constexpr int MISO_PIN = 13;
+    static constexpr int MOSI_PIN = 11;
+    static constexpr int NSS_PIN = 10;
+    static constexpr int DIO1_PIN = 45;
+    static constexpr int NRST_PIN = RADIOLIB_NC;
+    static constexpr int BUSY_PIN = 2;
 
-        EspHal hal;
-        Module module;
-        LLCC68 radio;
-         
-        message_t currentTxMessage;
-        message_t currentRxMessage;
-        size_t currentTxMessageOffset;
-        size_t currentRxMessageOffset;
-        
-        TaskHandle_t rxtxTaskHandle;
-        static constexpr UBaseType_t rxtxTaskNotifyIndex = 0; // index of the notification value used for receive ISR flag
+    EspHal hal;
+    Module module;
+    LLCC68 radio;
 
-        void handle_receive();
-        static void IRAM_ATTR transmit_isr(void);
-        static void IRAM_ATTR receive_isr(void);
-        static void rxtx_task_trampoline(void* param);
+    TaskHandle_t rxtxTaskHandle;
+    // index of the task notification used by the radio ISR callback
+    static constexpr UBaseType_t rxtxTaskNotifyIndex = 0;
 
-    protected:
+    void handle_receive(QueueHandle_t rxQueue);
+    static void IRAM_ATTR radio_isr(void);
+    static void rxtx_task_trampoline(void* param);
 
-        static constexpr uint16_t max_payload_size = 256; // max payload size of LLCC68 is 256 bytes
-        static constexpr uint16_t rxtx_interval_ms = 500;
-        static constexpr uint32_t tx_timeout_ms = 500;
+   protected:
+    // radio settings; must match what beginFSK is configured with in init()
+    static constexpr float frequency_mhz = 434.0f;
+    static constexpr uint32_t bitrate_bps = 2400;  // 2.4 kbps
+    static constexpr float frequency_deviation_khz = 2.4f;
+    static constexpr float rx_bandwidth_khz = 11.7f;
+    static constexpr int8_t tx_power_dbm = 22;
+    static constexpr uint16_t preamble_length_bits = 32;
 
-        QueueHandle_t commandQueue;
-        QueueHandle_t sensorDataQueue;
+    // max payload of a single FSK packet is 255 bytes; one byte is used as the
+    // per-message length prefix, so a single message is limited to 254 bytes
+    static constexpr size_t max_payload_size =
+        RADIOLIB_SX126X_MAX_PACKET_LENGTH;
+    static constexpr size_t max_message_length = max_payload_size - 1;
 
-        size_t pack_messages(std::span<uint8_t> buffer, QueueHandle_t queue);
-        void unpack_messages(const std::span<uint8_t> buffer, QueueHandle_t queue);
-        void transmit_data(std::span<uint8_t> buffer);
-        bool listen(uint16_t timeout_ms, bool return_on_receive);
-                
-    public:
-        NarrowbandRadio();
-        void init(QueueHandle_t commandQueue, QueueHandle_t sensorDataQueue);
-        void rxtx_task();
-    };
+    static constexpr uint32_t tx_timeout_ms =
+        500;  // base timeout, extended by airtime in transmit_data()
 
-    #ifdef CONFIG_NB_MODE_ROCKET
-    
-    class RocketRadio : public NarrowbandRadio<RocketRadio> {
-        public: 
-            void rxtx_task() {
-                ESP_LOGI(TAG, "[LLCC68] Started rxtx task!\n");
+    // a full-size packet takes ~880 ms on air at 2.4 kbps; the listen window
+    // must be at least that long, otherwise the radio's hardware timeout would
+    // abort a packet that is still being received when the window ends
+    static constexpr uint16_t listen_window_ms = 1200;
 
-                std::array<uint8_t, max_payload_size> tx_buffer;
-                while (true) {
+    QueueHandle_t commandQueue;
+    QueueHandle_t sensorDataQueue;
 
-                    // TX
-                    size_t len = 24;
-                    uint8_t* tx_data = (uint8_t*)malloc(len);
-                    memcpy(tx_data, "Hello from the rocket! ", len);
-                    message_t msg = {tx_data, len};
+    size_t pack_messages(std::span<uint8_t> buffer, QueueHandle_t queue);
+    void unpack_messages(std::span<const uint8_t> buffer, QueueHandle_t queue);
+    void transmit_data(std::span<uint8_t> buffer);
+    bool listen(uint16_t timeout_ms, bool return_on_receive,
+                QueueHandle_t rxQueue);
 
-                    xQueueSend(sensorDataQueue, &msg, portMAX_DELAY);
-                    size_t bytes_copied = pack_messages(tx_buffer, sensorDataQueue);
-                    transmit_data(std::span<uint8_t>(tx_buffer.data(), bytes_copied));
+   public:
+    NarrowbandRadio();
+    void init(QueueHandle_t commandQueue, QueueHandle_t sensorDataQueue);
+};
 
-                    // RX
-                    bool packet_received = listen(rxtx_interval_ms, false);
-                    if (packet_received) {
-                        ESP_LOGI(TAG, "Packet received from ground!\n");
-                    }
+#ifdef CONFIG_NB_RADIO_MODE_ROCKET
 
-                }
-            }
-    };
+class RocketRadio : public NarrowbandRadio<RocketRadio> {
+   public:
+    void rxtx_task() {
+        ESP_LOGI(TAG, "Rocket rxtx task started");
+        std::array<uint8_t, max_payload_size> tx_buffer;
 
-    // static instance of the rocket radio class
-    RocketRadio nb_radio;
+        while (true) {
+            // transmit all queued sensor data (whole messages, batched)
+            size_t bytes_copied = pack_messages(tx_buffer, sensorDataQueue);
+            transmit_data(std::span<uint8_t>(tx_buffer.data(), bytes_copied));
 
-    #endif
-
-    #ifdef CONFIG_NB_MODE_GROUND
-
-    class GroundRadio : public NarrowbandRadio<GroundRadio> {
-        public: 
-            void rxtx_task() {
-                ESP_LOGI(TAG, "[LLCC68] Started ground task!\n");
-
-                std::array<uint8_t, max_payload_size> tx_buffer;
-                while (true) {
-
-                    // RX
-                    bool packet_received = listen(2*rxtx_interval_ms, true);
-                    if (!packet_received) {
-                        ESP_LOGI(TAG, "No packet received within timeout. Rocket not available.\n");
-                        continue; // no rocket data received, continue listening
-                    }
-                    
-                    ESP_LOGI(TAG, "Packet received from rocket!\n");
-
-                    // TX - send a command to rocket
-                    size_t bytes_copied = pack_messages(tx_buffer, commandQueue);
-                    transmit_data(std::span<uint8_t>(tx_buffer.data(), bytes_copied));
-
-                }
-            }
-    };
-
-    // static instance of the ground radio class
-    GroundRadio nb_radio;
-
-    #endif
-
-    // CLASS IMPLEMENTATION
-
-    template<typename RadioType>
-    NarrowbandRadio<RadioType>::NarrowbandRadio()
-        : hal(SCLK_PIN, MISO_PIN, MOSI_PIN),
-        module(&hal, NSS_PIN, DIO1_PIN, NRST_PIN, BUSY_PIN),
-        radio(&module),
-        currentTxMessage{nullptr, 0},
-        currentRxMessage{nullptr, 0},
-        currentTxMessageOffset(0),
-        currentRxMessageOffset(0),
-        rxtxTaskHandle(nullptr),
-        commandQueue(nullptr),
-        sensorDataQueue(nullptr)
-    {}
-
-    template<typename RadioType>
-    void NarrowbandRadio<RadioType>::init(QueueHandle_t commandQueue, QueueHandle_t sensorDataQueue) {
-        ESP_LOGI(TAG, "[LLCC68] Initializing narrowband radio...");
-        
-        // TODO: remove magic numbers, use config values instead
-        // freq 434 Mhz, bitrate 2.4 kHz, frequency deviation 2.4 kHz, receiver bandwidth DSB 11.7 kHz, power 22 dBm, preamble length 32 bit, TCXO voltage 0 V, useRegulatorLDO false
-        int state = radio.beginFSK(434, 2.4, 2.4, 11.7, 22, 32, 0, false);
-        if (state != RADIOLIB_ERR_NONE) {
-            ESP_LOGE(TAG, "beginFSK failed, code %d (fatal)\n", state);
-            abort(); // fatal error, cannot continue without radio
-        }
-
-        this->commandQueue = commandQueue;
-        this->sensorDataQueue = sensorDataQueue;
-
-        // RXEN pin: 16
-        // TXEN pin controlled via dio2
-        radio.setRfSwitchPins(RXEN_PIN, RADIOLIB_NC);
-        radio.setDio2AsRfSwitch(true);
-
-        ESP_LOGI(TAG, "success!\n");
-
-        // for more details, see LLCC68 datasheet, this is the highest power setting, with 22 dBm set in beginFSK
-        state = radio.setPaConfig(0x04, 0x00, 0x07, 0x01);
-        if (state != RADIOLIB_ERR_NONE) {
-            ESP_LOGE(TAG, "PA config failed, code %d (fatal)\n", state);
-            abort();
-        }
-        ESP_LOGI(TAG, "[LLCC68] PA config configured!\n");
-
-        // configure callback for received/transmitted packet; must be a free/IRAM-safe function
-        radio.setPacketReceivedAction(receive_isr);
-        radio.setPacketSentAction(transmit_isr);
-
-        xTaskCreate(rxtx_task_trampoline, "rxtx", 4096, this, 1, &rxtxTaskHandle);
-        configASSERT( rxtxTaskHandle != NULL );
-
-    }
-
-    template<typename RadioType>
-    void IRAM_ATTR NarrowbandRadio<RadioType>::transmit_isr(void) {
-        BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-
-        configASSERT( nb_radio.rxtxTaskHandle != NULL );
-
-        vTaskNotifyGiveIndexedFromISR( nb_radio.rxtxTaskHandle, nb_radio.rxtxTaskNotifyIndex, &xHigherPriorityTaskWoken );
-        portYIELD_FROM_ISR( xHigherPriorityTaskWoken );
-    }
-
-    // ISR callback stored in IRAM; just sets the atomic flag
-    template<typename RadioType>
-    void IRAM_ATTR NarrowbandRadio<RadioType>::receive_isr(void) {
-        BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-
-        configASSERT( nb_radio.rxtxTaskHandle != NULL );
-
-        vTaskNotifyGiveIndexedFromISR( nb_radio.rxtxTaskHandle, nb_radio.rxtxTaskNotifyIndex, &xHigherPriorityTaskWoken );
-        portYIELD_FROM_ISR( xHigherPriorityTaskWoken );
-    }
-
-
-    // TODO: consider if dropping messages when queue is full is acceptable
-    // TODO: ackknowledgement mechanism? -> msg_len 0 could indicate an ack msg
-    // returns number of bytes packed into buffer
-    template<typename RadioType>
-    size_t NarrowbandRadio<RadioType>::pack_messages(std::span<uint8_t> buffer, QueueHandle_t queue) {
-        size_t offset = 0;
-
-        if (currentTxMessage.length > currentTxMessageOffset) {
-
-            size_t bytes_to_copy = std::min(currentTxMessage.length - currentTxMessageOffset, buffer.size());
-            memcpy(buffer.data(), currentTxMessage.data + currentTxMessageOffset, bytes_to_copy);
-            offset += bytes_to_copy;
-            if (currentTxMessageOffset + bytes_to_copy >= currentTxMessage.length) {
-                // message fully packed, free the message data and reset the current message    
-                free(currentTxMessage.data); // free the message data after packing
-                currentTxMessage.data = nullptr;
-                currentTxMessage.length = 0;
-                currentTxMessageOffset = 0;
-            } else {
-                // message not fully packed, update the offset for the next pack
-                currentTxMessageOffset += bytes_to_copy;
-                offset += bytes_to_copy; // this makes sure to skip the while loop
-            }
-        }
-
-        while (offset < buffer.size()) {
-            free(currentTxMessage.data); // free the previous message data before receiving the next message from the queue
-            if (xQueueReceive( queue, &currentTxMessage, (TickType_t) 0 ) == pdTRUE) {
-                currentTxMessageOffset = 0; // reset offset for new message
-
-                if (currentTxMessage.length == 0) {
-                    // skip empty messages
-                    continue;
-                } else if (currentTxMessage.length > 255) {
-                    // 255 is the limit currently, because our lenght indicator is only 1 byte.
-                    // if longer messages are needed, consider using 2 bytes for length indicator
-                    ESP_LOGE(TAG, "Message length exceeds maximum of 255 bytes, truncating message\n");
-                    currentTxMessage.length = 255; // truncate message to max length
-                }
-
-                buffer[offset++] = (uint8_t)(currentTxMessage.length & 0xFF); // store length as 1 byte, assuming max message length is 255
-
-                size_t bytes_to_copy = std::min(currentTxMessage.length, buffer.size() - offset);
-                memcpy(buffer.data() + offset, currentTxMessage.data, bytes_to_copy);
-                offset += bytes_to_copy;
-                currentTxMessageOffset += bytes_to_copy;
-
-            } else {
-                // no more messages in the queue
-                ESP_LOGI(TAG, "No more messages to pack in the queue!\n");
-                currentTxMessage.data = nullptr;
-                currentTxMessage.length = 0;
-                currentTxMessageOffset = 0;
-                break;
-            }
-        }
-
-        return offset;
-    }
-
-    // TODO: consider if dropping messages when queue is full is acceptable
-    // TODO: ackknowledgement mechanism? -> msg_len 0 could indicate an ack msg
-    template<typename RadioType>
-    void NarrowbandRadio<RadioType>::unpack_messages(const std::span<uint8_t> buffer, QueueHandle_t queue) {
-        size_t length = buffer.size();
-        size_t offset = 0;
-
-        if (currentRxMessage.length > currentRxMessageOffset) {
-            size_t bytes_to_copy = std::min(currentRxMessage.length - currentRxMessageOffset, length);
-            memcpy(currentRxMessage.data + currentRxMessageOffset, buffer.data(), bytes_to_copy);
-            if (currentRxMessageOffset + bytes_to_copy >= currentRxMessage.length) {
-                // message fully unpacked, enqueue the message and reset the current message
-                message_t msg = {
-                    .data = currentRxMessage.data,
-                    .length = currentRxMessage.length
-                };
-
-                if (xQueueSend( queue, (void *) &msg, ( TickType_t ) 0 ) != pdTRUE) {
-                    ESP_LOGE(TAG, "Failed to enqueue received command, command queue is full!\n");
-                    free(currentRxMessage.data); // free the message data if it cannot be enqueued
-                }
-
-                currentRxMessage.data = nullptr;
-                currentRxMessage.length = 0;
-                currentRxMessageOffset = 0;
-            } else {
-                // message not fully unpacked, update the offset for the next unpack
-                currentRxMessageOffset += bytes_to_copy;
-                offset += bytes_to_copy; // this makes sure to skip the while loop
-            }
-        }
-
-        while (offset < length) {
-            uint8_t msg_length = buffer[offset++];
-
-            // TODO: maybe implement a static memory pool to avoid memory fragmentation in the long run
-            uint8_t* msg_data = (uint8_t*)malloc(msg_length);
-            if (msg_data == nullptr) {
-                ESP_LOGE(TAG, "Failed to allocate memory for received message of length %d bytes\n", msg_length);
-                break; // stop unpacking
-            }
-
-            size_t bytes_to_copy = std::min((size_t)msg_length, length - offset);
-            memcpy(msg_data, buffer.data() + offset, bytes_to_copy);
-            offset += bytes_to_copy;
-
-            if (bytes_to_copy < msg_length) {
-                // message not fully unpacked, store the partial message and wait for the next buffer to unpack the rest
-                currentRxMessage.data = msg_data;
-                currentRxMessage.length = msg_length;
-                currentRxMessageOffset = bytes_to_copy;
-                break;
-            }
-
-            // message fully unpacked, enqueue the message
-            message_t msg = {
-                .data = msg_data,
-                .length = msg_length
-            };
-
-            if (xQueueSend( queue, (void *) &msg, ( TickType_t ) 0 ) != pdTRUE) {
-                ESP_LOGE(TAG, "Failed to enqueue received command, command queue is full!\n");
-                free(msg_data); // free the message data if it cannot be enqueued
-            }
+            // listen for commands until the next transmission interval
+            listen(listen_window_ms, false, commandQueue);
         }
     }
+};
 
-    // TODO: add tx_timeout_ms as parameter to allow for different timeouts for different messages
-    template<typename RadioType>
-    void NarrowbandRadio<RadioType>::transmit_data(std::span<uint8_t> buffer) {
-        if (buffer.size() == 0) {
-            ESP_LOGI(TAG, "No data to transmit, skipping transmission\n");
-            return;
-        }
+RocketRadio nb_radio;
 
-        int state = radio.startTransmit(buffer.data(), buffer.size());
-        if (state != RADIOLIB_ERR_NONE) {
-            ESP_LOGI(TAG, "startTransmit failed, code %d\n", state);
-            return;
-        }
+#endif  // CONFIG_NB_RADIO_MODE_ROCKET
 
-        // wait for transmission to complete or timeout
-        uint32_t ulNotificationValue = ulTaskNotifyTakeIndexed(rxtxTaskNotifyIndex, pdTRUE, pdMS_TO_TICKS(tx_timeout_ms));
-        if (ulNotificationValue == 1) {
-            state = radio.finishTransmit();
-            if (state != RADIOLIB_ERR_NONE) {
-                ESP_LOGI(TAG, "Transmission failed during finishTransmit, code %d\n", state);
-            } else {
-                ESP_LOGI(TAG, "Transmission successful!\n");
+#ifdef CONFIG_NB_RADIO_MODE_GROUND
+
+class GroundRadio : public NarrowbandRadio<GroundRadio> {
+   public:
+    void rxtx_task() {
+        ESP_LOGI(TAG, "Ground rxtx task started");
+        std::array<uint8_t, max_payload_size> tx_buffer;
+
+        while (true) {
+            // wait for a rocket transmission; received messages land in
+            // sensorDataQueue
+            bool packet_received =
+                listen(listen_window_ms, true, sensorDataQueue);
+            if (!packet_received) {
+                ESP_LOGD(TAG, "No packet received, rocket not available");
+                continue;
             }
-        } else {
-            ESP_LOGI(TAG, "Transmission timeout, no callback received within %d ms\n", tx_timeout_ms);
-        }
 
+            // respond with all queued commands
+            size_t bytes_copied = pack_messages(tx_buffer, commandQueue);
+            transmit_data(std::span<uint8_t>(tx_buffer.data(), bytes_copied));
+        }
+    }
+};
+
+GroundRadio nb_radio;
+
+#endif  // CONFIG_NB_RADIO_MODE_GROUND
+
+// CLASS IMPLEMENTATION
+
+template <typename RadioType>
+NarrowbandRadio<RadioType>::NarrowbandRadio()
+    : hal(SCLK_PIN, MISO_PIN, MOSI_PIN),
+      module(&hal, NSS_PIN, DIO1_PIN, NRST_PIN, BUSY_PIN),
+      radio(&module),
+      rxtxTaskHandle(nullptr),
+      commandQueue(nullptr),
+      sensorDataQueue(nullptr) {}
+
+template <typename RadioType>
+void NarrowbandRadio<RadioType>::init(QueueHandle_t commandQueue,
+                                      QueueHandle_t sensorDataQueue) {
+    ESP_LOGI(TAG, "[LLCC68] Initializing narrowband radio...");
+
+    this->commandQueue = commandQueue;
+    this->sensorDataQueue = sensorDataQueue;
+
+    // 434 MHz, 2.4 kbps FSK, 2.4 kHz deviation, 11.7 kHz receive bandwidth,
+    // 22 dBm, 32-bit preamble; beginFSK also configures DIO2 to control the
+    // TX/RX RF switch
+    int state = radio.beginFSK(frequency_mhz, bitrate_bps / 1000.0f,
+                               frequency_deviation_khz, rx_bandwidth_khz,
+                               tx_power_dbm, preamble_length_bits, 0, false);
+    if (state != RADIOLIB_ERR_NONE) {
+        ESP_LOGE(TAG, "beginFSK failed, code %d (fatal)", state);
+        abort();
     }
 
-    template<typename RadioType>
-    void NarrowbandRadio<RadioType>::handle_receive() {
-
-        // TODO: maybe implement a static memory pool to avoid memory fragmentation in the long run
-        size_t len = radio.getPacketLength();
-        uint8_t* buf = (uint8_t*)malloc(len);
-
-        int state = radio.readData(buf, len);
-
-        if (state == RADIOLIB_ERR_CRC_MISMATCH) {
-            ESP_LOGI(TAG, "Received packet with CRC mismatch!\n");
-            free(buf);
-            return;
-        } else if (state != RADIOLIB_ERR_NONE) {
-            ESP_LOGI(TAG, "Failed to read received packet, code %d\n", state);
-            free(buf);
-            return;
-        }
-
-        ESP_LOGI(TAG, "Received packet with length %d bytes\n", len);
-        unpack_messages(std::span<uint8_t>(buf, len), commandQueue);
-        free(buf);
+    // highest-power PA configuration for the LLCC68, see datasheet
+    state = radio.setPaConfig(0x04, 0x00, 0x07, 0x01);
+    if (state != RADIOLIB_ERR_NONE) {
+        ESP_LOGE(TAG, "PA config failed, code %d (fatal)", state);
+        abort();
     }
 
-    // TODO: send back ACKknowledgement for received commands, to give sender the option to retry if ACK is not received within a certain time frame
-    template<typename RadioType>
-    bool NarrowbandRadio<RadioType>::listen(uint16_t timeout_ms, bool return_on_receive) {
-        int state = radio.startReceive();
-        if (state == RADIOLIB_ERR_NONE) {
-            ESP_LOGI(TAG, "Waiting for a packet...\n");
-        } else {
-            ESP_LOGI(TAG, "failed to start receiver, code %d\n", state);
-            return false;
-        }
+    // register the DIO1 callback; it must be IRAM-safe and must not touch the
+    // radio. RX and TX events share DIO1, so the same handler is used for both
+    // (RadioLib attaches the same pin for both callbacks, the second one wins)
+    radio.setPacketReceivedAction(radio_isr);
+    radio.setPacketSentAction(radio_isr);
 
-        bool packet_received = false;
-
-        // receive for 0.5 s (the amount specified by rxtx_interval_ms)
-        TickType_t start = xTaskGetTickCount();
-        uint16_t elapsed_time_ms = 0;
-        uint32_t ulNotificationValue;
-        while (elapsed_time_ms < timeout_ms) {
-            ulNotificationValue = ulTaskNotifyTakeIndexed(rxtxTaskNotifyIndex, pdTRUE, pdMS_TO_TICKS(timeout_ms - elapsed_time_ms));
-            if (ulNotificationValue == 1) {
-
-                handle_receive();
-                packet_received = true;
-
-                if (return_on_receive) {
-                    break; // exit the loop if we want to return after receiving a packet
-                }
-
-                elapsed_time_ms = pdTICKS_TO_MS(xTaskGetTickCount() - start);
-            } else {
-                // timeout, no packet received within the interval
-                break;
-            }
-        }
-        
-        // TODO: check if this can be left out
-        state = radio.finishReceive();
-        if (state != RADIOLIB_ERR_NONE) {
-            ESP_LOGI(TAG, "failed to finish receive, code %d\n", state);
-        }
-        return packet_received;
+    BaseType_t task_created = xTaskCreate(rxtx_task_trampoline, "rxtx", 4096,
+                                          this, 1, &rxtxTaskHandle);
+    if (task_created != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create rxtx task (fatal)");
+        abort();
     }
 
-    template<typename RadioType>
-    void NarrowbandRadio<RadioType>::rxtx_task_trampoline(void* param) {
-        static_cast<RadioType*>(param)->rxtx_task();
+    ESP_LOGI(TAG, "[LLCC68] Initialized successfully");
+}
+
+// RadioLib calls this from the GPIO ISR; it only wakes the rxtx task. A
+// notification alone is not proof of a radio event: RX and TX share one
+// notification index, and notifications may be stale (e.g. a TX_DONE arriving
+// after its timeout). Callers must confirm the event by reading the latched
+// radio IRQ flags.
+template <typename RadioType>
+void IRAM_ATTR NarrowbandRadio<RadioType>::radio_isr(void) {
+    // a DIO1 edge between callback registration and task creation is possible
+    // (the radio is in standby then, so it is not a real RX/TX event); ignore
+    // it instead of asserting from ISR context
+    if (nb_radio.rxtxTaskHandle == nullptr) {
+        return;
+    }
+
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+    vTaskNotifyGiveIndexedFromISR(nb_radio.rxtxTaskHandle,
+                                  nb_radio.rxtxTaskNotifyIndex,
+                                  &xHigherPriorityTaskWoken);
+    portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+}
+
+// Packs whole messages from the queue into the buffer as [length][payload]
+// frames. Messages are never split across packets: a message that does not
+// fit into the remaining space is left in the queue for the next packet.
+// Returns the number of bytes packed. Only the rxtx task consumes the queue
+// (the producer only sends), so xQueuePeek + xQueueReceive is safe.
+template <typename RadioType>
+size_t NarrowbandRadio<RadioType>::pack_messages(std::span<uint8_t> buffer,
+                                                 QueueHandle_t queue) {
+    size_t offset = 0;
+
+    while (offset < buffer.size()) {
+        message_t msg{};
+        // peek without removing, so messages that do not fit are not lost
+        if (xQueuePeek(queue, &msg, (TickType_t)0) != pdTRUE) {
+            break;  // queue empty
+        }
+
+        if (msg.length == 0) {
+            // drop zero-length messages
+            xQueueReceive(queue, &msg, (TickType_t)0);
+            free(msg.data);
+            continue;
+        }
+
+        size_t length = std::min(msg.length, max_message_length);
+        if (length != msg.length) {
+            ESP_LOGW(TAG, "Message too long (%u bytes), truncating to %u bytes",
+                     (unsigned)msg.length, (unsigned)length);
+        }
+
+        // 1 byte length prefix + payload must fit into the remaining space
+        if (offset + 1 + length > buffer.size()) {
+            break;  // leave the message in the queue for the next packet
+        }
+
+        xQueueReceive(queue, &msg, (TickType_t)0);
+        buffer[offset++] = (uint8_t)length;
+        memcpy(buffer.data() + offset, msg.data, length);
+        offset += length;
+        free(msg.data);
+    }
+
+    return offset;
+}
+
+// Parses [length][payload] frames from a received packet and enqueues each
+// message. Malformed frames (length exceeding the packet) drop the rest of
+// the packet, so a damaged stream cannot desynchronize subsequent packets.
+template <typename RadioType>
+void NarrowbandRadio<RadioType>::unpack_messages(
+    std::span<const uint8_t> buffer, QueueHandle_t queue) {
+    size_t offset = 0;
+
+    while (offset < buffer.size()) {
+        uint8_t length = buffer[offset++];
+        if (length == 0) {
+            continue;  // zero-length frame; reserved for future use (e.g.
+                       // acknowledgements)
+        }
+        if (offset + length > buffer.size()) {
+            ESP_LOGW(TAG,
+                     "Truncated message (%u bytes claimed, %u left), dropping "
+                     "rest of packet",
+                     (unsigned)length, (unsigned)(buffer.size() - offset));
+            break;
+        }
+
+        uint8_t* data = (uint8_t*)malloc(length);
+        if (data == nullptr) {
+            ESP_LOGE(TAG, "Out of memory for %u-byte message",
+                     (unsigned)length);
+            break;
+        }
+
+        memcpy(data, buffer.data() + offset, length);
+        offset += length;
+
+        message_t msg = {.data = data, .length = length};
+        if (xQueueSend(queue, &msg, (TickType_t)0) != pdTRUE) {
+            ESP_LOGW(TAG, "Receive queue full, dropping message");
+            free(data);
+        }
     }
 }
+
+template <typename RadioType>
+void NarrowbandRadio<RadioType>::transmit_data(std::span<uint8_t> buffer) {
+    if (buffer.empty()) {
+        return;  // nothing to send
+    }
+
+    // discard stale notifications (e.g. a late RX event from a previous listen
+    // window); the radio is in standby here, so no real event can be lost
+    while (ulTaskNotifyTakeIndexed(rxtxTaskNotifyIndex, pdTRUE, 0) != 0) {
+    }
+
+    int state = radio.startTransmit(buffer.data(), buffer.size());
+    if (state != RADIOLIB_ERR_NONE) {
+        ESP_LOGW(TAG, "startTransmit failed, code %d", state);
+        return;
+    }
+
+    // base timeout plus on-air time of the payload (~10 bytes of
+    // preamble/sync/CRC overhead)
+    uint32_t airtime_ms = ((buffer.size() + 10) * 8 * 1000) / bitrate_bps;
+    uint32_t timeout_ms = tx_timeout_ms + airtime_ms;
+
+    ulTaskNotifyTakeIndexed(rxtxTaskNotifyIndex, pdTRUE,
+                            pdMS_TO_TICKS(timeout_ms));
+
+    // the latched TX_DONE flag, not the notification count, proves completion:
+    // the software timeout may race with TX_DONE arriving in the last tick
+    if (radio.getIrqFlags() & RADIOLIB_SX126X_IRQ_TX_DONE) {
+        ESP_LOGI(TAG, "Transmitted %u bytes", (unsigned)buffer.size());
+    } else {
+        ESP_LOGW(TAG, "Transmission timed out after %u ms",
+                 (unsigned)timeout_ms);
+    }
+
+    // always return to standby and clear IRQ flags, also on timeout
+    state = radio.finishTransmit();
+    if (state != RADIOLIB_ERR_NONE) {
+        ESP_LOGW(TAG, "finishTransmit failed, code %d", state);
+    }
+}
+
+// Listens for packets for up to timeout_ms. The receiver is armed for a
+// single packet per iteration with a hardware timeout (the SX126x then falls
+// back to standby after a packet or timeout), so no partial or stale FIFO
+// data can ever be read. If return_on_receive is set, stops after the first
+// packet, otherwise keeps listening for the whole window.
+template <typename RadioType>
+bool NarrowbandRadio<RadioType>::listen(uint16_t timeout_ms,
+                                        bool return_on_receive,
+                                        QueueHandle_t rxQueue) {
+    bool packet_received = false;
+    TickType_t start = xTaskGetTickCount();
+    TickType_t timeout_ticks = pdMS_TO_TICKS(timeout_ms);
+
+    while (true) {
+        if (packet_received && return_on_receive) {
+            break;
+        }
+
+        TickType_t elapsed = xTaskGetTickCount() - start;
+        if (elapsed >= timeout_ticks) {
+            break;  // listen window over
+        }
+
+        // single-shot receive, hardware timeout in units of 15.625 us
+        uint32_t rx_timeout_raw = pdTICKS_TO_MS(timeout_ticks - elapsed) * 64;
+        int state =
+            radio.startReceive(rx_timeout_raw, RADIOLIB_IRQ_RX_DEFAULT_FLAGS,
+                               RADIOLIB_IRQ_RX_DEFAULT_MASK);
+        if (state != RADIOLIB_ERR_NONE) {
+            ESP_LOGW(TAG, "Failed to start receiver, code %d", state);
+            break;
+        }
+
+        // wait for the packet to complete, the hardware timeout, or a stale
+        // notification
+        uint32_t count = ulTaskNotifyTakeIndexed(rxtxTaskNotifyIndex, pdTRUE,
+                                                 timeout_ticks - elapsed);
+
+        // the latched IRQ flags are the source of truth: a notification alone
+        // may be stale (e.g. TX_DONE from an earlier transmission), and the
+        // software timeout can race with a packet completing in the last tick
+        if (radio.getIrqFlags() & RADIOLIB_SX126X_IRQ_RX_DONE) {
+            handle_receive(rxQueue);
+            packet_received = true;
+        }
+
+        if (count == 0) {
+            break;  // listen window over
+        }
+    }
+
+    // return to standby so the next operation starts from a known state
+    int state = radio.finishReceive();
+    if (state != RADIOLIB_ERR_NONE) {
+        ESP_LOGW(TAG, "Failed to finish receive, code %d", state);
+    }
+    return packet_received;
+}
+
+template <typename RadioType>
+void NarrowbandRadio<RadioType>::handle_receive(QueueHandle_t rxQueue) {
+    size_t len = radio.getPacketLength();
+    if (len == 0) {
+        ESP_LOGD(TAG, "RX_DONE without payload, ignoring");
+        return;
+    }
+
+    uint8_t* buf = (uint8_t*)malloc(len);
+    if (buf == nullptr) {
+        ESP_LOGE(TAG, "Out of memory for %u-byte receive buffer",
+                 (unsigned)len);
+        return;
+    }
+
+    int state = radio.readData(buf, len);
+    if (state == RADIOLIB_ERR_CRC_MISMATCH) {
+        ESP_LOGW(TAG, "Dropping %u-byte packet with CRC mismatch",
+                 (unsigned)len);
+    } else if (state != RADIOLIB_ERR_NONE) {
+        ESP_LOGW(TAG, "Failed to read received packet, code %d", state);
+    } else {
+        ESP_LOGI(TAG, "Received %u-byte packet", (unsigned)len);
+        unpack_messages(std::span<const uint8_t>(buf, len), rxQueue);
+    }
+
+    free(buf);
+}
+
+template <typename RadioType>
+void NarrowbandRadio<RadioType>::rxtx_task_trampoline(void* param) {
+    static_cast<RadioType*>(param)->rxtx_task();
+}
+}  // namespace
 
 // C COMPATIBILITY WRAPPERS
 
 extern "C" {
-    void init_narrowband(QueueHandle_t commandQueue, QueueHandle_t sensorDataQueue) {
-        nb_radio.init(commandQueue, sensorDataQueue);
-    }
+void init_narrowband(QueueHandle_t commandQueue,
+                     QueueHandle_t sensorDataQueue) {
+    nb_radio.init(commandQueue, sensorDataQueue);
+}
 }
