@@ -1,0 +1,95 @@
+menu "Neo-M9N GPS"
+
+    config NEO_M9N_ENABLE
+        bool "Enable Neo-M9N GPS driver"
+        default n
+        help
+            Start the u-blox NEO-M9N-00B GPS driver (UART, NMEA-0183) from app_main.
+            The driver parses GGA/GSA/GSV/RMC/GLL/VTG statements and emits GPS_UPDATE
+            events on its own event loop.
+
+    config NEO_M9N_BAUD_RATE
+        int "GPS UART baud rate"
+        range 1200 230400
+        default 9600
+        help
+            Baud rate of the UART interface to the GPS module. 9600 is the classic
+            NMEA default; newer u-blox M9 firmware defaults UART1 to 38400. Match
+            this setting to the module configuration (e.g. set via u-center or the
+            UBX-CFG-PRT command).
+
+    config NMEA_PARSER_UART_RXD
+        int "GPS UART RX pin number"
+        range 0 64
+        default 5
+        help
+            GPIO number for the UART RX pin connected to the GPS TX pin.
+
+    config NMEA_PARSER_RING_BUFFER_SIZE
+        int "NMEA Parser Ring Buffer Size"
+        range 0 2048
+        default 1024
+        help
+            Size of the ring buffer used for the UART Rx channel.
+
+    config NMEA_PARSER_TASK_STACK_SIZE
+        int "NMEA Parser Task Stack Size"
+        range 0 4096
+        default 3072
+        help
+            Stack size of the NMEA parser task.
+
+    config NMEA_PARSER_TASK_PRIORITY
+        int "NMEA Parser Task Priority"
+        range 0 24
+        default 2
+        help
+            Priority of the NMEA parser task.
+
+    menu "NMEA Statement Support"
+        comment "At least one statement must be selected"
+
+        config NMEA_STATEMENT_GGA
+            bool "GGA Statement"
+            default y
+            help
+                Parse latitude, longitude, altitude, number of satellites in use,
+                fix status (no fix, GPS, DGPS) and UTC time from GGA.
+
+        config NMEA_STATEMENT_GSA
+            bool "GSA Statement"
+            default y
+            help
+                Parse position/vertical/horizontal dilution of precision, fix mode
+                (no fix, 2D, 3D) and IDs of satellites in use from GSA.
+
+        config NMEA_STATEMENT_GSV
+            bool "GSV Statement"
+            default y
+            help
+                Parse number of satellites in view and details of each satellite
+                in view from GSV.
+
+        config NMEA_STATEMENT_RMC
+            bool "RMC Statement"
+            default y
+            help
+                Parse GPS signal validity, ground speed (knots), course over ground
+                (degrees), magnetic variation and UTC date from RMC.
+
+        config NMEA_STATEMENT_GLL
+            bool "GLL Statement"
+            default y
+            help
+                Parse latitude, longitude and UTC time from GLL.
+
+        config NMEA_STATEMENT_VTG
+            bool "VTG Statement"
+            default y
+            help
+                Parse ground speed (knots, km/h) and course over ground (degrees)
+                from VTG.
+
+    endmenu
+
+endmenu
