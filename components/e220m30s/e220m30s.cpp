@@ -35,6 +35,7 @@ class NarrowbandRadio {
     static constexpr int DIO1_PIN = 45;
     static constexpr int NRST_PIN = RADIOLIB_NC;
     static constexpr int BUSY_PIN = 2;
+    static constexpr int RXEN_PIN = RADIOLIB_NC;
 
     EspHal hal;
     Module module;
@@ -173,6 +174,8 @@ void NarrowbandRadio<RadioType>::init(QueueHandle_t commandQueue,
         ESP_LOGE(TAG, "PA config failed, code %d (fatal)", state);
         abort();
     }
+
+    radio.setDio2AsRfSwitch(true);
 
     // register the DIO1 callback; it must be IRAM-safe and must not touch the
     // radio. RX and TX events share DIO1, so the same handler is used for both
