@@ -11,7 +11,7 @@ menu "Neo-M9N GPS"
     config NEO_M9N_BAUD_RATE
         int "GPS UART baud rate"
         range 1200 230400
-        default 9600
+        default 38400
         help
             Baud rate of the UART interface to the GPS module. 9600 is the classic
             NMEA default; newer u-blox M9 firmware defaults UART1 to 38400. Match
@@ -21,7 +21,7 @@ menu "Neo-M9N GPS"
     config NMEA_PARSER_UART_RXD
         int "GPS UART RX pin number"
         range 0 64
-        default 5
+        default 47
         help
             GPIO number for the UART RX pin connected to the GPS TX pin.
 
