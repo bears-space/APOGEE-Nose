@@ -167,3 +167,20 @@ menu "Vigilant Engine Configuration: I2C"
         help
             The frequency of the I2C communication in Hertz. Common values are 100000 (100 kHz) for standard mode and 400000 (400 kHz) for fast mode.
 endmenu
+
+menu "Narrowband Radio Configuration"
+
+    choice NB_RADIO_MODE
+        prompt "Radio Mode"
+        default NB_RADIO_MODE_ROCKET
+        help
+            Select the mode for the narrowband radio functionality.
+
+        config NB_RADIO_MODE_ROCKET
+            bool "Rocket Mode"
+
+        config NB_RADIO_MODE_GROUND
+            bool "Ground Mode"
+    endchoice
+
+endmenu
