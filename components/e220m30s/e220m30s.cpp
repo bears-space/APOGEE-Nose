@@ -33,7 +33,7 @@ class NarrowbandRadio {
     static constexpr int MOSI_PIN = 11;
     static constexpr int NSS_PIN = 10;
     static constexpr int DIO1_PIN = 45;
-    static constexpr int NRST_PIN = RADIOLIB_NC;
+    static constexpr int NRST_PIN = 0;
     static constexpr int BUSY_PIN = 2;
     static constexpr int RXEN_PIN = RADIOLIB_NC;
 
