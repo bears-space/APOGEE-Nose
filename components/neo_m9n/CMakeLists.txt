@@ -1,0 +1,11 @@
+idf_component_register(
+    SRCS
+        "src/neo_m9n.c"
+        "src/nmea_parser.c"
+    INCLUDE_DIRS
+        "include"
+        "src"
+    REQUIRES
+        esp_event
+        esp_driver_uart
+)
